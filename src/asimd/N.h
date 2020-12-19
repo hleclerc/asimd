@@ -24,6 +24,12 @@ struct N {
     N<-n>                   operator-      () const { return {}; }
 };
 
+template<class T> struct IsN { enum { value = false }; };
+template<int n> struct IsN<N<n>> { enum { value = true }; };
+
+template<class T> constexpr bool isN( const T & ) { return false; }
+template<int n> constexpr bool isN( N<n> ) { return true; }
+
 template<int n,int m> N<n+m  > operator+( N<n>, N<m> ) { return {}; }
 template<int n,int m> N<n-m  > operator-( N<n>, N<m> ) { return {}; }
 template<int n,int m> N<n*m  > operator*( N<n>, N<m> ) { return {}; }
