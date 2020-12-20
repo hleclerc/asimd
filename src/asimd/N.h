@@ -30,24 +30,39 @@ template<int n> struct IsN<N<n>> { enum { value = true }; };
 template<class T> constexpr bool isN( const T & ) { return false; }
 template<int n> constexpr bool isN( N<n> ) { return true; }
 
-template<int n,int m> N<n+m  > operator+( N<n>, N<m> ) { return {}; }
-template<int n,int m> N<n-m  > operator-( N<n>, N<m> ) { return {}; }
-template<int n,int m> N<n*m  > operator*( N<n>, N<m> ) { return {}; }
-template<int n,int m> N<n/m  > operator/( N<n>, N<m> ) { return {}; }
-template<int n,int m> N<(n<m)> operator<( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<n+m   > operator+ ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<n-m   > operator- ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<n*m   > operator* ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<n/m   > operator/ ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<(n< m)> operator< ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<(n<=m)> operator<=( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<(n> m)> operator> ( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<(n>=m)> operator>=( N<n>, N<m> ) { return {}; }
+template<int n,int m> N<(n==m)> operator==( N<n>, N<m> ) { return {}; }
 
-template<int n,class T> auto operator+( N<n>, const T &val ) { return n + val; }
-template<int n,class T> auto operator-( N<n>, const T &val ) { return n - val; }
-template<int n,class T> auto operator*( N<n>, const T &val ) { return n * val; }
-template<int n,class T> auto operator/( N<n>, const T &val ) { return n / val; }
-template<int n,class T> bool operator<( N<n>, const T &val ) { return n < val; }
+template<int n,class T> auto operator+ ( N<n>, const T &val ) { return n +  val; }
+template<int n,class T> auto operator- ( N<n>, const T &val ) { return n -  val; }
+template<int n,class T> auto operator* ( N<n>, const T &val ) { return n *  val; }
+template<int n,class T> auto operator/ ( N<n>, const T &val ) { return n /  val; }
+template<int n,class T> bool operator< ( N<n>, const T &val ) { return n <  val; }
+template<int n,class T> bool operator<=( N<n>, const T &val ) { return n <= val; }
+template<int n,class T> bool operator> ( N<n>, const T &val ) { return n >  val; }
+template<int n,class T> bool operator>=( N<n>, const T &val ) { return n >= val; }
+template<int n,class T> bool operator==( N<n>, const T &val ) { return n == val; }
 
-template<class T,int m> auto operator+( const T &val, N<m> ) { return val + m; }
-template<class T,int m> auto operator-( const T &val, N<m> ) { return val - m; }
-template<class T,int m> auto operator*( const T &val, N<m> ) { return val * m; }
-template<class T,int m> auto operator/( const T &val, N<m> ) { return val / m; }
-template<class T,int m> bool operator<( const T &val, N<m> ) { return val < m; }
+template<class T,int m> auto operator+ ( const T &val, N<m> ) { return val +  m; }
+template<class T,int m> auto operator- ( const T &val, N<m> ) { return val -  m; }
+template<class T,int m> auto operator* ( const T &val, N<m> ) { return val *  m; }
+template<class T,int m> auto operator/ ( const T &val, N<m> ) { return val /  m; }
+template<class T,int m> bool operator< ( const T &val, N<m> ) { return val <  m; }
+template<class T,int m> bool operator<=( const T &val, N<m> ) { return val <= m; }
+template<class T,int m> bool operator> ( const T &val, N<m> ) { return val >  m; }
+template<class T,int m> bool operator>=( const T &val, N<m> ) { return val >= m; }
+template<class T,int m> bool operator==( const T &val, N<m> ) { return val == m; }
 
 template<class T,int m> auto &operator+=( T &val, N<m> ) { val += m; return val; }
+template<class T,int m> auto &operator-=( T &val, N<m> ) { val -= m; return val; }
+template<class T,int m> auto &operator*=( T &val, N<m> ) { val *= m; return val; }
+template<class T,int m> auto &operator/=( T &val, N<m> ) { val /= m; return val; }
 
 } // namespace asimd
