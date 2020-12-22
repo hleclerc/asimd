@@ -34,29 +34,29 @@ struct Int {
     T                                  value;
 };
 
-template<class T,int a,int o,class U,int b,int p> auto operator+ ( const Int<T,a,o> &, const Int<U,b,p> & );
-template<class T,int a,int o,class U,int b,int p> auto operator- ( const Int<T,a,o> &, const Int<U,b,p> & );
-template<class T,int a,int o,class U,int b,int p> auto operator* ( const Int<T,a,o> &, const Int<U,b,p> & );
-
-template<class T,int a,int o,int d>               auto operator+ ( const Int<T,a,o> &, N<d> );
-template<class T,int a,int o,int d>               auto operator- ( const Int<T,a,o> &, N<d> );
-template<class T,int a,int o,int d>               auto operator* ( const Int<T,a,o> &, N<d> );
-template<class T,int a,int o>                     auto operator* ( const Int<T,a,o> &, N<0> );
-
-template<int d,class T,int a,int o>               auto operator+ ( N<d>,const Int<T,a,o> & );
-template<int d,class T,int a,int o>               auto operator- ( N<d>,const Int<T,a,o> & );
-template<int d,class T,int a,int o>               auto operator* ( N<d>,const Int<T,a,o> & );
-template<class T,int a,int o>                     auto operator* ( N<0>,const Int<T,a,o> & );
-
-template<class T,int a,int o,class D>             auto operator+ ( const Int<T,a,o> &, const D & );
-template<class T,int a,int o,class D>             auto operator- ( const Int<T,a,o> &, const D & );
-template<class T,int a,int o,class D>             auto operator* ( const Int<T,a,o> &, const D & );
-
-template<class D,class T,int a,int o>             auto operator+ ( const D &, const Int<T,a,o> & );
-template<class D,class T,int a,int o>             auto operator- ( const D &, const Int<T,a,o> & );
-template<class D,class T,int a,int o>             auto operator* ( const D &, const Int<T,a,o> & );
-
 } // namespace asimd
+
+template<class T,int a,int o,class U,int b,int p> auto operator+ ( const asimd::Int<T,a,o> &, const asimd::Int<U,b,p> & );
+template<class T,int a,int o,class U,int b,int p> auto operator- ( const asimd::Int<T,a,o> &, const asimd::Int<U,b,p> & );
+template<class T,int a,int o,class U,int b,int p> auto operator* ( const asimd::Int<T,a,o> &, const asimd::Int<U,b,p> & );
+
+template<class T,int a,int o,int d>               auto operator+ ( const asimd::Int<T,a,o> &, asimd::N<d> );
+template<class T,int a,int o,int d>               auto operator- ( const asimd::Int<T,a,o> &, asimd::N<d> );
+template<class T,int a,int o,int d>               auto operator* ( const asimd::Int<T,a,o> &, asimd::N<d> );
+template<class T,int a,int o>                     auto operator* ( const asimd::Int<T,a,o> &, asimd::N<0> );
+
+template<int d,class T,int a,int o>               auto operator+ ( asimd::N<d>, const asimd::Int<T,a,o> & );
+template<int d,class T,int a,int o>               auto operator- ( asimd::N<d>, const asimd::Int<T,a,o> & );
+template<int d,class T,int a,int o>               auto operator* ( asimd::N<d>, const asimd::Int<T,a,o> & );
+template<class T,int a,int o>                     auto operator* ( asimd::N<0>, const asimd::Int<T,a,o> & );
+
+template<class T,int a,int o,class D>             auto operator+ ( const asimd::Int<T,a,o> &, const D & );
+template<class T,int a,int o,class D>             auto operator- ( const asimd::Int<T,a,o> &, const D & );
+template<class T,int a,int o,class D>             auto operator* ( const asimd::Int<T,a,o> &, const D & );
+
+template<class D,class T,int a,int o>             auto operator+ ( const D &, const asimd::Int<T,a,o> & );
+template<class D,class T,int a,int o>             auto operator- ( const D &, const asimd::Int<T,a,o> & );
+template<class D,class T,int a,int o>             auto operator* ( const D &, const asimd::Int<T,a,o> & );
 
 #include "Int.tcc"
 
