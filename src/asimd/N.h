@@ -28,6 +28,8 @@ struct N {
 
 template<class T> struct IsN { enum { value = false }; };
 template<int n> struct IsN<N<n>> { enum { value = true }; };
+template<int n> struct IsN<N<n> &> { enum { value = true }; };
+template<int n> struct IsN<const N<n> &> { enum { value = true }; };
 
 template<class T> constexpr bool isN( const T & ) { return false; }
 template<int n> constexpr bool isN( N<n> ) { return true; }
