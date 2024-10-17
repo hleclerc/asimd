@@ -6,7 +6,7 @@
 namespace asimd {
 
 /**
-  Pointer with integer value guaranteed to be writable as
+  Pointer with integer value guaranteed to be equal to
     `alignment * n + offset` with `n` an integer
 */
 template<class Ptr,class T,int aligment_in_bits,int offset_in_bits>

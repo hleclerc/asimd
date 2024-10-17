@@ -3,7 +3,6 @@
 #include "SimdFeatureOn.h"
 
 namespace asimd {
-
 namespace features {
 
 #define ASIMD_CMON_TYPES float,double,std::int8_t,std::int16_t,std::int32_t,std::int64_t,std::uint8_t,std::uint16_t,std::uint32_t,std::uint64_t
@@ -31,5 +30,4 @@ struct SSE : SimdFeatureOn<128,8,ASIMD_CMON_TYPES> {
 #undef ASIMD_CMON_TYPES
 
 } // namespace features
-
 } // namespace asimd

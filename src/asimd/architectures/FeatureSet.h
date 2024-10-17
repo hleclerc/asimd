@@ -1,9 +1,9 @@
 #pragma once
 
-#include "../internal/S.h"
-#include <utility>
+#include "../support/S.h"
+#include "../support/N.h"
+//#include <utility>
 #include <string>
-#include "../N.h"
 
 namespace asimd {
 
@@ -22,7 +22,7 @@ class FeatureSet {
 
     // content if no feature left
     template<class... _Features> struct Content {
-        template<class Feature> struct Has { enum { value = false }; };
+        template<class Feature> struct Has { static constexpr bool value = 0; };
         template<class T> struct SimdSize { static constexpr int value = 1; };
         template<class T,int simd_size> struct NbSimdRegisters { static constexpr int value = 0; };
         static std::string feature_names( std::string = "," ) { return ""; }
@@ -33,7 +33,7 @@ class FeatureSet {
         using Next = Content<Tail...>;
 
         template<class Feature,int dummy=0> struct Has { enum { value = Next::template Has<Feature>::value }; };
-        template<int dummy> struct Has<Head,dummy> { enum { value = true }; };
+        template<int dummy> struct Has<Head,dummy> { static constexpr bool value = 1; };
 
         template<class T> struct SimdSize { static constexpr int value = std::max( SimdSizeFeature<Head,T>::value, Next::template SimdSize<T>::value ); };
         template<class T,int simd_size> struct NbSimdRegisters { static constexpr int value = std::max( NbSimdRegistersFeature<Head,T,simd_size>::value, Next::template NbSimdRegisters<T,simd_size>::value ); };
@@ -53,22 +53,22 @@ class FeatureSet {
 public:    
     template<class F>
     struct Has {
-        enum { value = C::template Has<F>::value };
+        static constexpr bool value = C::template Has<F>::value;
     };
 
     template<class T>
     struct SimdSize {
-        enum { value = C::template SimdSize<T>::value };
+        static constexpr int value = C::template SimdSize<T>::value;
     };
 
     template<class T,int simd_size=SimdSize<T>::value>
     struct SimdAlig {
-        enum { value = simd_size * sizeof( T ) * 8 }; /// in bits
+        static constexpr int value = simd_size * sizeof( T ) * 8; /// in bits
     };
 
     template<class T,int simd_size=SimdSize<T>::value>
     struct NbSimdRegisters {
-        enum { value = C::template NbSimdRegisters<T,simd_size>::value };
+        static constexpr int value = C::template NbSimdRegisters<T,simd_size>::value;
     };
 
     static std::string feature_names() {
