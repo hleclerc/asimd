@@ -1,16 +1,16 @@
 #pragma once
 
-#include "../architectures/NativeCpu.h"
+#include "../SimdMask.h"
 #include "HaD.h"
 #include "S.h"
-
-#include <ostream>
 
 #ifndef ASIMD_DEBUG_ON_OP
 #define ASIMD_DEBUG_ON_OP( NAME, COND )
 #endif // ASIMD_DEBUG_ON_OP
 
 namespace asimd {
+template<class T,int size,class Arch> struct SimdVec;
+
 namespace SimdVecImpl {
 
 template<class I> inline constexpr
@@ -481,23 +481,27 @@ void init_stream( const P &data, const Impl<T,1,Arch> &impl ) {
 // cmp operations ------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP( NAME, OP ) \
     template<class T,int size,class Arch,class I> HaD \
-    Impl<I,size,Arch> NAME##_SimdVec( const Impl<T,size,Arch> &a, const Impl<T,size,Arch> &b, S<Impl<I,size,Arch>> ) { \
+    Impl<I,size,Arch> NAME##_to_SimdVec( const Impl<T,size,Arch> &a, const Impl<T,size,Arch> &b, S<Impl<I,size,Arch>> ) { \
         Impl<I,size,Arch> res; \
-        res.data.split.v0 = NAME##_SimdVec( a.data.split.v0, b.data.split.v0, S<Impl<I,a.split_size_0,Arch>>() ); \
-        res.data.split.v1 = NAME##_SimdVec( a.data.split.v1, b.data.split.v1, S<Impl<I,a.split_size_1,Arch>>() ); \
+        res.data.split.v0 = NAME##_to_SimdVec( a.data.split.v0, b.data.split.v0, S<Impl<I,a.split_size_0,Arch>>() ); \
+        res.data.split.v1 = NAME##_to_SimdVec( a.data.split.v1, b.data.split.v1, S<Impl<I,a.split_size_1,Arch>>() ); \
         return res; \
     } \
     template<class T,class Arch,class I> HaD \
-    Impl<I,1,Arch> NAME##_SimdVec( const Impl<T,1,Arch> &a, const Impl<T,1,Arch> &b, S<Impl<I,1,Arch>> ) { \
+    Impl<I,1,Arch> NAME##_to_SimdVec( const Impl<T,1,Arch> &a, const Impl<T,1,Arch> &b, S<Impl<I,1,Arch>> ) { \
         Impl<I,1,Arch> res; \
         res.data.values[ 0 ] = a.data.values[ 0 ] OP b.data.values[ 0 ] ? ~I( 0 ) : I( 0 ); \
         return res; \
     } \
     template<class T,int size,class Arch> \
     struct Op_##NAME { \
-        template<class VI> HaD \
-        VI as_SimdVec( S<VI> ) const { \
-            return NAME##_SimdVec( a, b, S<VI>() ); \
+        /*HaD operator SimdMask<size,Arch>() const { */ \
+        /*    return NAME##_to_SimdMask( a, b ); */ \
+        /*} */ \
+        \
+        template<class VI> \
+        HaD operator SimdVec<VI,size,Arch>() const { \
+            return NAME##_to_SimdVec( a, b, S<Impl<VI,size,Arch>>() ); \
         } \
         \
         Impl<T,size,Arch> a, b; \

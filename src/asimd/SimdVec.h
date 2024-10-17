@@ -1,11 +1,14 @@
 #pragma once
 
 #include "internal/SimdVecImpl_Generic.h"
-#include "internal/SimdVecImpl_X86.h"
 #include "internal/S.h"
+#include "SimdMask.h"
 #include "SimdSize.h"
-#include "Ptr.h"
 #include "N.h"
+
+#include "internal/SimdMaskImpl_X86.h"
+#include "internal/SimdVecImpl_X86.h"
+#include "Ptr.h"
 
 namespace asimd {
 
@@ -98,7 +101,15 @@ struct SimdVec {
     HaD SimdVec                                  operator*             ( const SimdVec &that ) const { return SimdVecImpl::mul( impl, that.impl ); }
     HaD SimdVec                                  operator/             ( const SimdVec &that ) const { return SimdVecImpl::div( impl, that.impl ); }
 
+    // comparison: return an Op_... that can be converted to a SimdMask or a SimdVec
     HaD auto                                     operator>             ( const SimdVec &that ) const { return SimdVecImpl::gt ( impl, that.impl );  }
+    HaD auto                                     operator<             ( const SimdVec &that ) const { return SimdVecImpl::lt ( impl, that.impl );  }
+
+    // self arithmetic operators
+    HaD SimdVec&                                 operator+=            ( const auto &that ) { *this = *this + that; return *this; }
+    HaD SimdVec&                                 operator-=            ( const auto &that ) { *this = *this - that; return *this; }
+    HaD SimdVec&                                 operator*=            ( const auto &that ) { *this = *this * that; return *this; }
+    HaD SimdVec&                                 operator/=            ( const auto &that ) { *this = *this / that; return *this; }
 
     HaD T                                        sum                   () const { return SimdVecImpl::horizontal_sum( impl ); }
 
@@ -107,17 +118,10 @@ struct SimdVec {
     Impl                                         impl;                 ///<
 };
 
-// to convert result of things that produce boolean results (operator>, ...)
-template<class SV,class OP> HaD
-SV as_SimdVec( const OP &op ) {
-    return op.as_SimdVec( S<typename SV::Impl>() );
-}
-
 template<class T,int size,class Arch> HaD
 SimdVec<T,size,Arch> min( const SimdVec<T,size,Arch> &a, const SimdVec<T,size,Arch> &b ) { return SimdVecImpl::min( a.impl, b.impl ); }
 
 template<class T,int size,class Arch> HaD
 SimdVec<T,size,Arch> max( const SimdVec<T,size,Arch> &a, const SimdVec<T,size,Arch> &b ) { return SimdVecImpl::max( a.impl, b.impl ); }
-
 
 } // namespace asimd
