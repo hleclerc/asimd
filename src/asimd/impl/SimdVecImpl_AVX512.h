@@ -2,6 +2,7 @@
  
 #include "../architectures/X86CpuFeatures.h"
 #include "SimdVecImpl_Generic.h"
+#include <immintrin.h>
 #include <x86intrin.h>
 
 namespace asimd {
@@ -180,27 +181,16 @@ SIMD_VEC_IMPL_REG_SCATTER( AVX512, FP32, SI32, 4, _mm_i32scatter_ps   ( data, in
 
 // cmp simdvec ---------------------------------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX512( NAME, FLAG_F, FLAG_I ) \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI64, PI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI64, PI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP64, PI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_pd_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI32, PI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI32, PI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP32, PI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_ps_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
-    \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI64, SI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI64, SI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP64, SI32,  8, NAME, _mm256_movm_epi32( _mm512_cmp_pd_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI32, SI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI32, SI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP32, SI32, 16, NAME, _mm512_movm_epi32( _mm512_cmp_ps_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
-    \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI64, PI64, 8, NAME, _mm512_movm_epi64( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI64, PI64, 8, NAME, _mm512_movm_epi64( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP64, PI64, 8, NAME, _mm512_movm_epi64( _mm512_cmp_pd_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
-    \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI64, std::int64_t,  8, NAME, _mm512_movm_epi64( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI64, std::int64_t,  8, NAME, _mm512_movm_epi64( _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP64, std::int64_t,  8, NAME, _mm512_movm_epi64( _mm512_cmp_pd_mask   ( a.data.reg, b.data.reg, FLAG_F ) ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI64,  8, 1, NAME, _mm512_cmp_epu64_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI64,  8, 1, NAME, _mm512_cmp_epi64_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP64,  8, 1, NAME, _mm512_cmp_pd_mask   ( a.data.reg, b.data.reg, FLAG_F ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI32, 16, 1, NAME, _mm512_cmp_epu32_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI32, 16, 1, NAME, _mm512_cmp_epi32_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, FP32, 16, 1, NAME, _mm512_cmp_ps_mask   ( a.data.reg, b.data.reg, FLAG_F ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI16, 32, 1, NAME, _mm512_cmp_epu16_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI16, 32, 1, NAME, _mm512_cmp_epi16_mask( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, PI8 , 64, 1, NAME, _mm512_cmp_epu8_mask ( a.data.reg, b.data.reg, FLAG_I ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX512, SI8 , 64, 1, NAME, _mm512_cmp_epi8_mask ( a.data.reg, b.data.reg, FLAG_I ) ); \
 
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX512( lt, _CMP_LT_OS, _MM_CMPINT_LT )
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX512( gt, _CMP_GT_OS, _MM_CMPINT_GT )

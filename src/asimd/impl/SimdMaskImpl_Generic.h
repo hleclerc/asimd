@@ -10,6 +10,7 @@ namespace asimd {
 namespace internal {
 
 // SimdMaskImpl ---------------------------------------------------------
+/// item_size = 1 to store bits
 template<int nb_items,int item_size,class Arch>
 struct SimdMaskImpl;
 
@@ -66,7 +67,7 @@ struct SimdMaskImpl<nb_items,item_size,Arch> {
 };
 
 
-/// Helper to make a SimdMaskImpl with a register
+/// Helper to make a SimdMaskImpl with a register. Version where mask values are stored in integer with size >= 8 bits
 #define SIMD_MASK_IMPL_REG_LARGE( COND, NB_ITEMS, ITEM_SIZE, TREG ) \
     template<class Arch> requires ( Arch::template Has<features::COND>::value ) \
     struct SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> { \
@@ -78,6 +79,31 @@ struct SimdMaskImpl<nb_items,item_size,Arch> {
         }; \
         union { \
             PI##ITEM_SIZE values[ NB_ITEMS ]; \
+            Split split; \
+            TREG reg; \
+        } data; \
+    };
+
+#define SIMD_MASK_IMPL_REG_BITS_UNSPLITABLE( COND, NB_ITEMS, TREG ) \
+    template<class Arch> requires ( Arch::template Has<features::COND>::value ) \
+    struct SimdMaskImpl<NB_ITEMS,1,Arch> { \
+        union { \
+            BitVec<NB_ITEMS> values; \
+            TREG reg; \
+        } data; \
+    };
+
+#define SIMD_MASK_IMPL_REG_BITS_SPLITABLE( COND, NB_ITEMS, TREG ) \
+    template<class Arch> requires ( Arch::template Has<features::COND>::value ) \
+    struct SimdMaskImpl<NB_ITEMS,1,Arch> { \
+        static constexpr int split_size_0 = prev_pow_2( NB_ITEMS ); \
+        static constexpr int split_size_1 = NB_ITEMS - split_size_0; \
+        struct Split { \
+            SimdMaskImpl<NB_ITEMS/2,1,Arch> v0; \
+            SimdMaskImpl<NB_ITEMS/2,1,Arch> v1; \
+        }; \
+        union { \
+            BitVec<NB_ITEMS> values; \
             Split split; \
             TREG reg; \
         } data; \

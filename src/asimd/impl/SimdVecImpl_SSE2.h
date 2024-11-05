@@ -128,12 +128,12 @@ SIMD_VEC_IMPL_REG_ARITHMETIC_OP( SSE2, FP32, 4, anb, _mm_and_ps    );
 
 //// cmp operations ------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( NAME, CMP ) \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI64, PI64, 2, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI64, PI64, 2, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP64, PI64, 2, NAME, (__m128i)_mm_cmp_pd   ( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI32, PI32, 4, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI32, PI32, 4, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP32, PI32, 4, NAME, (__m128i)_mm_cmp_ps   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP64, 2, 64, NAME, (__m128i)_mm_cmp_pd   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP32, 4, 32, NAME, (__m128i)_mm_cmp_ps   ( a.data.reg, b.data.reg, CMP ) ); \
 
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( lt, _CMP_LT_OS )
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( gt, _CMP_GT_OS )

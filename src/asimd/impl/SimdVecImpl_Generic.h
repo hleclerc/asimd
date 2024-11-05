@@ -518,11 +518,13 @@ SIMD_VEC_IMPL_CMP_OP( gt, > )
 
 #undef SIMD_VEC_IMPL_CMP_OP
 
-#define SIMD_VEC_IMPL_CMP_OP_SIMDVEC( COND, T, I, SIZE, NAME, FUNC ) \
+#define SIMD_VEC_IMPL_CMP_OP_SIMDVEC( COND, T, NB_ITEMS, ITEM_SIZE, NAME, FUNC ) \
     template<class Arch> requires( Arch::template Has<features::COND>::value ) HaD \
-    auto NAME##_as_a_simd_mask( const SimdVecImpl<T,SIZE,Arch> &a, const SimdVecImpl<T,SIZE,Arch> &b ) { \
-        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<SIZE,8*sizeof(I),Arch> res; res.data.reg = FUNC; return res; \
-    } \
+    auto NAME##_as_a_simd_mask( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
+        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
+    }
+
+#define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_VEC( COND, T, I, SIZE, NAME, FUNC ) \
     template<class Arch> requires( Arch::template Has<features::COND>::value ) HaD \
     auto NAME##_as_a_simd_vec( const SimdVecImpl<T,SIZE,Arch> &a, const SimdVecImpl<T,SIZE,Arch> &b, S<SimdVecImpl<I,SIZE,Arch>> ) { \
         ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdVecImpl<I,SIZE,Arch> res; res.data.reg = FUNC; return res; \
@@ -584,9 +586,9 @@ void scatter( G *ptr, const V &ind, const SimdVecImpl<T,1,Arch> &vec ) {
 }
 
 #define SIMD_VEC_IMPL_REG_SCATTER( COND, T, I, SIZE, FUNC ) \
-    template<class Arch> HaD \
-    auto scatter( T *data, const SimdVecImpl<I,SIZE,Arch> &ind, const SimdVecImpl<T,SIZE,Arch> &vec ) -> requires( Arch::template Has<features::COND>::value ) { \
-        ASIMD_DEBUG_ON_OP("scatter",#COND,#FUNC) ; FUNC; \
+    template<class Arch> requires( Arch::template Has<features::COND>::value ) HaD \
+    auto scatter( T *data, const SimdVecImpl<I,SIZE,Arch> &ind, const SimdVecImpl<T,SIZE,Arch> &vec ) { \
+        ASIMD_DEBUG_ON_OP("scatter",#COND,#FUNC); FUNC; \
     }
 
 
