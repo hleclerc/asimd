@@ -1,14 +1,13 @@
 #pragma once
 
+#ifdef __SSE2__
+
 #include "../architectures/X86CpuFeatures.h"
 #include "SimdVecImpl_Generic.h"
 #include <x86intrin.h>
 
 namespace asimd {
 namespace internal {
-
-#ifdef __SSE2__
-
 
 // struct Impl<...>
 SIMD_VEC_IMPL_REG( SSE2, PI64, 2, __m128i );
@@ -126,22 +125,7 @@ SIMD_VEC_IMPL_REG_ARITHMETIC_OP( SSE2, PI32, 4, anb, _mm_and_si128 );
 SIMD_VEC_IMPL_REG_ARITHMETIC_OP( SSE2, SI32, 4, anb, _mm_and_si128 );
 SIMD_VEC_IMPL_REG_ARITHMETIC_OP( SSE2, FP32, 4, anb, _mm_and_ps    );
 
-//// cmp operations ------------------------------------------------------------------
-#define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( NAME, CMP ) \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP64, 2, 64, NAME, (__m128i)_mm_cmp_pd   ( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, PI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, SI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
-    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP32, 4, 32, NAME, (__m128i)_mm_cmp_ps   ( a.data.reg, b.data.reg, CMP ) ); \
-
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( lt, _CMP_LT_OS )
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( gt, _CMP_GT_OS )
-
-#undef SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX
-
-
-#endif // __SSE2__
-
 } // namespace internal
 } // namespace asimd
+
+#endif // __SSE2__

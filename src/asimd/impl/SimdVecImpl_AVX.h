@@ -1,13 +1,13 @@
 #pragma once
 
+#ifdef __AVX__
+
 #include "../architectures/X86CpuFeatures.h"
 #include "SimdVecImpl_Generic.h"
 #include <x86intrin.h>
 
 namespace asimd {
 namespace internal {
-
-#ifdef __AVX__
 
 
 // struct Impl<...>
@@ -109,7 +109,7 @@ SIMD_VEC_IMPL_REG_ARITHMETIC_OP_AVX_F( div );
 SIMD_VEC_IMPL_REG_ARITHMETIC_OP( AVX , FP64, 4, anb, _mm256_and_pd    );
 SIMD_VEC_IMPL_REG_ARITHMETIC_OP( AVX , FP32, 8, anb, _mm256_and_ps    );
 
-// cmp simdvec ---------------------------------------------------------------------------------------------
+//// cmp operations ------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( NAME, CMP ) \
     SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, PI64, 4, 64, NAME, (__m256i)_mm256_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
     SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, SI64, 4, 64, NAME, (__m256i)_mm256_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
@@ -117,13 +117,19 @@ SIMD_VEC_IMPL_REG_ARITHMETIC_OP( AVX , FP32, 8, anb, _mm256_and_ps    );
     SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, PI32, 8, 32, NAME, (__m256i)_mm256_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
     SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, SI32, 8, 32, NAME, (__m256i)_mm256_cmp_epi64( a.data.reg, b.data.reg, CMP ) ); \
     SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, FP32, 8, 32, NAME, (__m256i)_mm256_cmp_ps   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, PI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, SI64, 2, 64, NAME, (__m128i)_mm_cmp_epi64   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, FP64, 2, 64, NAME, (__m128i)_mm_cmp_pd      ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, PI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, SI32, 4, 32, NAME, (__m128i)_mm_cmp_epi64   ( a.data.reg, b.data.reg, CMP ) ); \
+    SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, FP32, 4, 32, NAME, (__m128i)_mm_cmp_ps      ( a.data.reg, b.data.reg, CMP ) ); \
 
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( lt, _CMP_LT_OS )
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX( gt, _CMP_GT_OS )
 
 #undef SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX
 
-#endif // __AVX__
-
 } // namespace internal
 } // namespace asimd
+
+#endif // __AVX__

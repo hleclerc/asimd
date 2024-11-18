@@ -151,9 +151,13 @@ bool at( const SimdMaskImpl<nb_items,item_size,Arch> &mask, int i ) {
 // any, all ------------------------------------------------------------------
 // template<int nb_items,int item_size,class Arch> HaD
 // bool any( const SimdMaskImpl<nb_items,item_size,Arch> &mask )  {
-//     std::cout << "pouet\n";
 //     return mask.data.values.any();
 // }
+
+template<int nb_items,class Arch> HaD
+bool any( const SimdMaskImpl<nb_items,1,Arch> &mask )  {
+    return mask.data.values.any();
+}
 
 template<int nb_items,int item_size,class Arch> HaD
 bool all( const SimdMaskImpl<nb_items,item_size,Arch> &mask )  {

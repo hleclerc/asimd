@@ -1,5 +1,7 @@
 #pragma once
  
+#ifdef __AVX512F__
+
 #include "../architectures/X86CpuFeatures.h"
 #include "SimdVecImpl_Generic.h"
 #include <immintrin.h>
@@ -8,7 +10,6 @@
 namespace asimd {
 namespace internal {
  
-#ifdef __AVX512F__
 
 // struct Impl<...>
 SIMD_VEC_IMPL_REG( AVX512, PI64,  8, __m512i );
@@ -195,8 +196,7 @@ SIMD_VEC_IMPL_REG_SCATTER( AVX512, FP32, SI32, 4, _mm_i32scatter_ps   ( data, in
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX512( lt, _CMP_LT_OS, _MM_CMPINT_LT )
 SIMD_VEC_IMPL_CMP_OP_SIMDVEC_AVX512( gt, _CMP_GT_OS, _MM_CMPINT_GT )
 
-#endif // __AVX512F__
-
 } // namespace internal
 } // namespace asimd
 
+#endif // __AVX512F__

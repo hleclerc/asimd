@@ -476,15 +476,27 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     } \
     template<class T,class Arch> HaD \
     SimdMaskImpl<4,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,4,Arch> &a, const SimdVecImpl<T,4,Arch> &b ) { \
-        return { a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ], a.data.values[ 2 ] OP b.data.values[ 2 ], a.data.values[ 3 ] OP b.data.values[ 3 ] }; \
+        SimdMaskImpl<4,1,Arch> res; \
+        res.data.values.set_values( \
+            a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ], a.data.values[ 2 ] OP b.data.values[ 2 ], a.data.values[ 3 ] OP b.data.values[ 3 ] \
+        ); \
+        return res; \
     } \
     template<class T,class Arch> HaD \
     SimdMaskImpl<2,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,2,Arch> &a, const SimdVecImpl<T,2,Arch> &b ) { \
-        return { a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ] }; \
+        SimdMaskImpl<2,1,Arch> res; \
+        res.data.values.set_values( \
+            a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ] \
+        ); \
+        return res; \
     } \
     template<class T,class Arch> HaD \
     SimdMaskImpl<1,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1,Arch> &b ) { \
-        return { a.data.values[ 0 ] OP b.data.values[ 0 ] }; \
+        SimdMaskImpl<2,1,Arch> res; \
+        res.data.values.set_values( \
+            a.data.values[ 0 ] OP b.data.values[ 0 ] \
+        ); \
+        return res; \
     } \
     /* _as_a_simd_vec */ \
     template<class T,int size,class Arch,class I> HaD \

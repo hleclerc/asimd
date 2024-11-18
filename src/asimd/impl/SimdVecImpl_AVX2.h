@@ -1,14 +1,13 @@
 #pragma once
 
+#ifdef __AVX2__
+
 #include "SimdVecImpl_Generic.h"
 #include "SimdVecImpl_AVX.h"
 #include <x86intrin.h>
 
 namespace asimd {
 namespace internal {
-
-#ifdef __AVX2__
-
 
 //// arithmetic operations with != func and name -------------------------------------------------------
 SIMD_VEC_IMPL_REG_ARITHMETIC_OP( AVX2, PI64, 4, anb, _mm256_and_si256 );
@@ -60,7 +59,7 @@ SIMD_VEC_IMPL_REG_GATHER( AVX2, SI32, SI32, 4, _mm_i32gather_epi32   ( data, ind
 SIMD_VEC_IMPL_REG_GATHER( AVX2, FP32, SI32, 4, _mm_i32gather_ps      ( data, ind.data.reg, 4 ) );
 
 
-#endif // __AVX2__
-
 } // namespace internal
 } // namespace asimd
+
+#endif // __AVX2__
