@@ -492,7 +492,7 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     } \
     template<class T,class Arch> HaD \
     SimdMaskImpl<1,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1,Arch> &b ) { \
-        SimdMaskImpl<2,1,Arch> res; \
+        SimdMaskImpl<1,1,Arch> res; \
         res.data.values.set_values( \
             a.data.values[ 0 ] OP b.data.values[ 0 ] \
         ); \
