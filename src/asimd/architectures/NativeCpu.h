@@ -1,11 +1,13 @@
 #pragma once
 
 #include "X86Cpu.h"
+#include "ArmCpu.h"
 
 namespace asimd {
 
 
 // -------------------------- Native --------------------------
+// x86
 #if ( defined(_M_IX86) || defined(__i386__) || defined(_M_X64) || defined(__x86_64__) )
 using NativeCpu = X86Cpu< 8 * sizeof( void * )
     #ifdef __AVX512F__
@@ -24,7 +26,11 @@ using NativeCpu = X86Cpu< 8 * sizeof( void * )
        , features::SSE
     #endif
 >;
-#endif // x86
+#endif 
 
+#if ( defined( __arm64__ ) )
+using NativeCpu = ArmCpu< 8 * sizeof( void * )
+>;
+#endif
 
 } // namespace asimd
