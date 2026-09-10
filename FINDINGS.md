@@ -17,7 +17,7 @@ Measured on `g++ 15.2`, Xeon W-2145 (Skylake-X: SSE2 … AVX-512VL/BW/DQ).
 | (operation, type, ISA) cells that compile | 258 / 408 | **408 / 408** |
 | (operation, type, width) cells with a register form | 8 / 63 | **59 / 63** |
 | operations returning wrong values | 5 | **0** |
-| values passed through memory across a call | 2 of 5 probes | **0 of 5** |
+| values passed through memory across a call | 2 of 5 probes | **0 of 5** (and see § 9.4: three of those five were the wrong question) |
 | value assertions, at 5 ISA levels | 29 (one level) | **2 860** |
 | public headers that compile standalone | 4 / 7 | **7 / 7** |
 | cells that need gcc's vector extensions to be fast (the MSVC gap) | 12 / 168 | **2 / 168** |
@@ -590,23 +590,67 @@ lesson in its own right: written with `prev_pow_2( N )` directly rather than tak
 variants get the guard for free by asking the *impl* whether it splits; this one has no impl to ask,
 so the guard is explicit.
 
-### 9.4 The AArch64 ABI needed no work, and that is a measurement
+### 9.4 The AArch64 ABI, and the check that was asking the wrong question
 
 § 3 is the longest section of this document because the SysV eightbyte classification cost a factor
 of two. AAPCS64 does not have it: a Homogeneous Vector Aggregate — one to four members, all the
-same vector type — travels in `v0`-`v7`, and the union that broke SysV breaks nothing here.
+same vector type — travels in `v0`-`v7`, so **at one register** the union that broke SysV breaks
+nothing here, and no layout work was needed.
 
-Worth *verifying* rather than assuming, and now verified: all eight probes come out clean on ARM,
-including the eight-lane ones, where the value is two registers and no register impl exists at that
-width at all. That last part is the interesting one — it says the **split crosses a call in its
-registers**, which is the premise the library rests on and the case ARM meets first rather than as
-an edge case.
+**Above one register, neither convention can help, and the probe did not know that.** This is the
+one thing the port got wrong and CI caught:
 
-The probe needed three portability fixes to say so, all of them the silent-zero kind: the stack
-pointer is `sp` and not `%rsp`, Mach-O prefixes symbols with `_`, and `--disassemble=` is a GNU
-spelling. And it gained three symbols: eight lanes is one register on AVX2 and *two* on any ARM
-part, so nothing had ever measured a value that fits in a single register — the case where going
-through memory is least excusable.
+| | above one register |
+|---|---|
+| SysV x86-64 | on the **stack**. Two `__m256d` classify SSE,SSEUP,SSEUP,SSEUP then SSE again, and the fifth eightbyte alone is enough. § 3 already calls this "unrecoverable" about `Split` |
+| AAPCS64 | **by reference** in `x0`-`x7`, with an indirect return through `x8` |
+
+So `SimdVec<double,8>` — 64 bytes — crosses a call through memory on every target without a 64-byte
+register. `probe_fma_f64` was in the *enforced* list, and it passed for one reason only: the machine
+this probe was written on is a Skylake-X, where eight doubles are one `zmm`. On a CI runner with
+AVX2 it is 18 instructions and 12 stack accesses, and the check failed the build for something no
+code change can fix:
+
+```
+  probe_fma_f64    14 instructions, 6 touching %rsp
+error: probe_fma_f64: this value is passed through MEMORY. Either the union in ...
+```
+
+That is a **false negative in the check, reported as a failure in the code** — the most expensive
+kind, because it points at the wrong file. Worse, the same probe was reporting the *opposite* false
+answer on ARM: AAPCS64's by-reference form means the callee reads its argument through a pointer
+register and never touches `sp`, so those widths came out "0 touching sp" while the value sat in
+memory the whole time. The README claim written from that reading — that the split crosses a call
+in its registers on ARM — was wrong, and is corrected.
+
+Two green lights that meant nothing, in one check, in opposite directions. The same failure mode as
+`no_vecext.sh` in § 9.2, and the reason the probe now `raise`s when it cannot disassemble a symbol
+instead of counting zero.
+
+**The fix is to ask the question only where it has an answer.** The enforced probes are now written
+at `SimdSize<T>` — one register by definition on every target, four lanes under SSE2 and on any ARM
+part, eight under AVX2, sixteen under AVX-512 — and their mask flavour is *deduced* from
+`decltype( gt( … ) )` rather than spelled out. That last part matters: `SimdMask<16,32>` asks
+AVX-512 for a 64-byte **lane** mask, a flavour whose comparisons never produce it and which has no
+register impl, so the first version of this fix failed on AVX-512 for a new reason of its own.
+Nothing in the enforced set now names a width or a flavour.
+
+The fixed-width 8-lane probes are kept and printed, because they still show whether the SPLIT path
+keeps register-level operations underneath it — but that claim is now asserted where it belongs, by
+`require_at_least` at SPLIT rank in *both* dispatch tests. A static_assert names the operation;
+an instruction count has to be interpreted, and the interpretation is what went wrong here.
+
+Writing those floors found one more thing, immediately: `fma` at a split width is **legitimately**
+rank 0 on any target without FMA. With no register `fma` anywhere the split form correctly reports
+itself unavailable, and the generic form is `add( mul( a, b ), c )` — whose `mul` and `add` have
+register forms and split on their own. Two `mulps` and two `addps`, not a lane loop. The first
+version of the floor asserted SPLIT unconditionally and failed at `-msse2`, `-msse4.2` and `-mavx`;
+a floor has to ask for what the target can actually give, which is § 8.2 over again.
+
+Three smaller portability fixes the same check needed, all of the silent-zero kind: the stack
+pointer is `sp` and not `%rsp`; Mach-O prefixes symbols with `_`; and a frame pointer puts
+`%rsp` in a *clean* prologue, so the probe is built with `-fomit-frame-pointer` and zero can mean
+zero.
 
 ### 9.5 What the backend costs, where it costs anything
 

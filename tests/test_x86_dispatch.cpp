@@ -100,6 +100,43 @@ static void require_the_floor() {
         sel::require_at_least<ops::select ,Key<float ,16,A,1>,sel::MASK_REGISTER>();
         sel::require_at_least<ops::to_bits,Key<void  ,16,A,1>,sel::MASK_REGISTER>();
     }
+    // ---- THE SPLIT FLOOR: widths above the register ----------------------------------------
+    //
+    // Every width that does not fit one register has to reach SPLIT, or the library is walking
+    // lanes for a value that fits in two registers. This was never asserted on x86 -- the ABI
+    // probe was standing in for it, by noticing that a lane loop spills, and that turned out to
+    // be the wrong instrument: at those widths the value goes through memory whatever the
+    // dispatch does (SysV cannot pass 64 bytes in registers without AVX-512), so the probe was
+    // asserting something no code change could deliver. A rank floor is the right tool, and it
+    // is a static_assert.
+    if constexpr ( A::template Has<features::SSE2>::value && ! A::template Has<features::AVX>::value )
+        // eight floats are two `xmm` here
+        sel::require_at_least<ops::cmp_gt,Key<float,8,A>,sel::SPLIT>();
+    if constexpr ( A::template Has<features::AVX>::value && ! A::template Has<features::AVX512>::value ) {
+        // ... and sixteen are two `ymm`, as are eight doubles
+        sel::require_at_least<ops::cmp_gt,Key<float ,16,A>,sel::SPLIT>();
+        sel::require_at_least<ops::select,Key<float ,16,A,32>,sel::SPLIT>();
+    }
+
+    // `fma` IS ONLY EXPECTED TO SPLIT WHERE THERE IS SOMETHING TO SPLIT INTO. Written without
+    // the FMA condition, these fired on every target that has no `vfmadd` at all -- and they
+    // were wrong to: with no register `fma` at any width the split form correctly reports itself
+    // unavailable, and the GENERIC form is `add( mul( a, b ), c )`, whose `mul` and `add` have
+    // register forms and split on their own. Rank 0 there is two `mulps` and two `addps`, not a
+    // lane loop. The floor has to ask for what the target can actually give.
+    if constexpr ( A::template Has<features::FMA>::value && A::template Has<features::SSE2>::value
+                && ! A::template Has<features::AVX>::value )
+        sel::require_at_least<ops::fma,Key<float,8,A>,sel::SPLIT>();
+    if constexpr ( A::template Has<features::FMA>::value && A::template Has<features::AVX>::value
+                && ! A::template Has<features::AVX512>::value ) {
+        sel::require_at_least<ops::fma,Key<float ,16,A>,sel::SPLIT>();
+        // the cell the ABI probe used to be watching, asserted properly: `fma` on eight doubles
+        // was a generic LANE LOOP once, and the probe reported it as 23 instructions with 12
+        // stack accesses. This says the same thing by name, and without depending on an ABI that
+        // cannot pass 64 bytes in registers anyway.
+        sel::require_at_least<ops::fma,Key<double, 8,A>,sel::SPLIT>();
+    }
+
     if constexpr ( A::template Has<features::AVX512VL>::value ) {
         // AVX-512VL is what puts the MASK REGISTERS on the narrower widths. Without these a
         // comparison at eight lanes still produced a 256-bit lane mask and `select` still

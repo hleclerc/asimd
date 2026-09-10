@@ -72,21 +72,45 @@ end
 target( "abi_probe" )
     set_kind( "object" )
     add_files( "abi_probe.cpp" )
+    -- NO FRAME POINTER. `movq %rsp, %rbp` in a prologue is not a value going through memory, but
+    -- it does touch `%rsp` -- so on any target that keeps a frame pointer by default (macOS, and
+    -- `-O0`) every probe read "1 touching %rsp" and the check either had to allow one, and miss a
+    -- real single spill, or fail on all of them. Removing the prologue makes zero mean zero.
+    add_cxflags( "-fomit-frame-pointer", { force = true } )
+    -- `extern "C"` is what gives these probes stable symbol names for `objdump` to find; clang
+    -- then warns that a C-linkage function returns a C++ type, on every one of them, on every
+    -- build. Scoped to clang because gcc has no such warning name and rejects unknown ones once
+    -- anything else goes wrong.
+    add_cxflags( "-Wno-return-type-c-linkage", { force = true, tools = { "clang", "clangxx" } } )
     after_build( function ( target )
         import( "core.base.option" )
         local obj = target:objectfiles()[ 1 ]
 
-        -- ALL OF THEM MUST BE CLEAN. Two were not when this probe was widened from one symbol to
-        -- five, and the two causes were different: `probe_fma_f64` had no `fma` registered at
-        -- eight lanes of double, so the generic lane loop ran; `probe_sel_lane` was a real ABI
-        -- problem, SIMD_MASK_IMPL_REG_LARGE still holding an array and a Split in its union.
+        -- WHAT IS ENFORCED, AND WHY THE REST IS NOT. See the header comment of `abi_probe.cpp`:
+        -- the ABI question only has a right answer at a width that IS one register, and the
+        -- `probe_nat_*` probes are written at `SimdSize<T>` precisely so that they are that width
+        -- on every target -- four lanes under SSE2 and on any ARM part, eight under AVX2, sixteen
+        -- under AVX-512.
         --
-        -- The `_4` probes were added for the ARM port. Eight lanes is one register on AVX2 and
-        -- two on any ARM part, so without them the probe never measured a value that fits in a
-        -- SINGLE register -- the case where going through memory is least excusable.
-        local must_be_clean = { "probe_fma", "probe_perm", "probe_fma_f64", "probe_sel_lane",
-                                "probe_sel_bits",
-                                "probe_fma_4", "probe_perm_4", "probe_sel_4" }
+        -- Above one register NEITHER convention can pass the value in registers: SysV sends it to
+        -- the stack (the fifth eightbyte of two `__m256d` is SSE, not SSEUP) and AAPCS64 passes it
+        -- BY REFERENCE in `x0`-`x7` with an indirect return through `x8`. Enforcing zero stack
+        -- traffic there asserted something no code change can deliver -- and it did fail CI, on
+        -- `probe_fma_f64`, which is 64 bytes and therefore one register only on AVX-512.
+        local must_be_clean = { "probe_nat_fma", "probe_nat_fma_f64", "probe_nat_perm",
+                                "probe_nat_add", "probe_nat_sel", "probe_nat_sel_f64" }
+        -- A KNOWN LIMIT OF THE ZERO-STACK TEST, written down rather than papered over: on
+        -- AAPCS64 a composite of 16 bytes or less that is NOT a Homogeneous Vector Aggregate is
+        -- passed in `x0`-`x7`, not on the stack -- so a mask impl that regrew an array would
+        -- arrive in general registers and this count would still read zero. What catches that
+        -- there is `require_at_least` in the dispatch tests, which is a static_assert and does
+        -- not depend on reading a disassembly at all.
+        --
+        -- disassembled and printed, not enforced: one register on AVX2 and up, two or more
+        -- elsewhere. What they show is whether the SPLIT path keeps register-level operations
+        -- underneath it, which `require_at_least` in the dispatch tests asserts properly.
+        local informational  = { "probe_fma", "probe_fma_f64", "probe_perm",
+                                 "probe_sel_lane", "probe_sel_bits" }
 
         -- THREE THINGS DIFFER BETWEEN HOSTS, and all three broke this check on ARM.
         --
@@ -99,16 +123,17 @@ target( "abi_probe" )
         --
         --   `--disassemble=` IS A GNU BINUTILS SPELLING. LLVM's objdump -- which is what
         --   `objdump` is on macOS -- wants `--disassemble-symbols=`. Both are tried.
-        local is_arm  = ( os.arch() or "" ):find( "arm" ) ~= nil or ( os.arch() or "" ):find( "aarch64" ) ~= nil
+        local arch = os.arch() or ""
+        local is_arm  = arch:find( "arm" ) ~= nil or arch:find( "aarch64" ) ~= nil
         local stack_re = is_arm and "%f[%w]sp%f[%W]" or "%%rsp"
         local stack_nm = is_arm and "sp" or "%rsp"
 
         local function disassemble( sym )
             for _, name in ipairs( { sym, "_" .. sym } ) do
                 for _, flag in ipairs( { "--disassemble-symbols=", "--disassemble=" } ) do
-                    -- `try`, not `pcall`: xmake's sandbox does not expose `pcall`, and a
-                    -- wrong flag or a missing symbol makes `objdump` exit non-zero, which
-                    -- `os.iorunv` turns into an error rather than a return value.
+                    -- `try`, not `pcall`: xmake's sandbox does not expose `pcall`, and a wrong
+                    -- flag or a missing symbol makes `objdump` exit non-zero, which `os.iorunv`
+                    -- turns into an error rather than a return value.
                     local dis = try { function () return os.iorunv( "objdump", { "-d", flag .. name, obj } ) end }
                     if dis and dis:find( "%x+:" ) then return dis end
                 end
@@ -129,23 +154,38 @@ target( "abi_probe" )
             return n_tot, n_stack
         end
 
-        cprint( "${bright}ABI probe${clear} (a value crossing a call by value, %s):", os.arch() )
-        for _, sym in ipairs( must_be_clean ) do
+        local function measure( sym )
             local n_tot, n_stack = count( sym )
             if not n_tot then
                 -- NOT SILENTLY OK. A probe that cannot be read is a probe that is not checking
                 -- anything, and this whole target exists because a `static_assert` cannot see an
-                -- ABI regression.
+                -- ABI regression. `no_vecext.sh` spent its whole life reporting a clean sweep for
+                -- exactly this reason -- see § 9.2 of FINDINGS.md.
                 raise( sym .. ": could not disassemble it out of " .. obj .. ". `objdump` is "
                     .. "needed for this check; on macOS it comes with the command line tools." )
             end
-            cprint( "  %-16s %2d instructions, %d touching %s", sym, n_tot, n_stack, stack_nm )
+            return n_tot, n_stack
+        end
+
+        cprint( "${bright}ABI probe${clear} (%s): a value that IS one register must cross a call in it", arch )
+        for _, sym in ipairs( must_be_clean ) do
+            local n_tot, n_stack = measure( sym )
+            cprint( "  %-20s %2d instructions, %d touching %s", sym, n_tot, n_stack, stack_nm )
             if n_stack > 0 then
-                raise( sym .. ": this value is passed through MEMORY. Either the union in "
-                    .. "SIMD_VEC_IMPL_REG / SIMD_MASK_IMPL_REG_LARGE has grown an array or a "
-                    .. "Split again (README, section 3), or the operation lost its register "
-                    .. "variant and fell back to the generic lane loop (FINDINGS.md, section 3)." )
+                raise( sym .. ": this value is passed through MEMORY, and at this width it fits "
+                    .. "in ONE register -- so this is a layout regression, not the ABI. Either "
+                    .. "the union in SIMD_VEC_IMPL_REG / SIMD_MASK_IMPL_REG_LARGE has grown an "
+                    .. "array or a Split again (README, section 3), or the operation lost its "
+                    .. "register variant and fell back to the generic lane loop (FINDINGS.md, "
+                    .. "section 3)." )
             end
         end
         cprint( "${green}ok${clear}: vectors and masks cross a call in their registers." )
+
+        cprint( "${bright}  above one register${clear} (both ABIs pass these through memory -- "
+             .. "informational, see abi_probe.cpp):" )
+        for _, sym in ipairs( informational ) do
+            local n_tot, n_stack = measure( sym )
+            cprint( "  %-20s %2d instructions, %d touching %s", sym, n_tot, n_stack, stack_nm )
+        end
     end )

@@ -239,11 +239,31 @@ architecture reach, which is what pushed three gaps in it into view — `bcast_l
 `mask_from_bits` had no split form at all, and both got one; they improve an SSE-only x86 build
 too.
 
-**The AArch64 ABI needed no work, and that is worth knowing rather than assuming.** AAPCS64 passes
-a Homogeneous Vector Aggregate — one to four members, all the same vector type — in `v0`-`v7`, and
-it has no eightbyte classification, so the union that cost a factor of two on SysV (§ 3) costs
-nothing here. All eight probes come out clean, *including* the eight-lane ones, where the value is
-two registers: the split crosses a call in its registers.
+**The AArch64 ABI needed no layout work at one register, and above one register no ABI can help.**
+AAPCS64 passes a Homogeneous Vector Aggregate — one to four members, all the same vector type — in
+`v0`-`v7`, so at `SimdSize<T>` lanes a value crosses a call in its register and the union that cost
+a factor of two on SysV (§ 3) costs nothing here.
+
+Above that width both conventions give up, and it took a red CI run to state it properly. SysV
+sends the value to the **stack** — two `__m256d` classify SSE,SSEUP,SSEUP,SSEUP then SSE again, and
+the fifth eightbyte alone is enough, which is exactly what § 3 calls "unrecoverable" about `Split`.
+AAPCS64 passes it **by reference** in `x0`-`x7` with an indirect return through `x8`. So
+`SimdVec<double,8>` — 64 bytes — travels through memory on every target without a 64-byte register,
+and no layout change can alter that.
+
+Which means the ABI probe was asserting the wrong thing at those widths: it demanded zero stack
+traffic from a value the ABI cannot keep in registers. It passed only on the AVX-512 machine it was
+written on, where eight doubles *are* one `zmm`, and failed on a CI runner with AVX2 for a reason
+no code change could fix. The enforced set is now written at `SimdSize<T>` — one register by
+construction, on every target — and the fixed-width probes are printed as information. What they
+were really guarding, "the operation did not lose its register variant", is now a `require_at_least`
+in both dispatch tests: a `static_assert` that names the operation instead of leaving an instruction
+count to be interpreted.
+
+The by-reference case also exposed a limit of the check itself: on AAPCS64 the callee reads its
+argument through a pointer register and never touches `sp`, so the probe reported those widths
+**clean** when the value was in memory all along. A green light that means nothing — the same
+failure mode as `no_vecext.sh` in § 6. Enforcing only at one register removes the question.
 
 ### The one place the backend costs instructions
 
@@ -327,31 +347,41 @@ And a check that is not an assertion but a **reading of the disassembly** — it
 build, because the regression it catches shows up nowhere else:
 
 ```
-ABI probe (a value crossing a call by value, arm64):
-  probe_fma         7 instructions, 0 touching sp
-  probe_perm       22 instructions, 0 touching sp
-  probe_fma_f64    13 instructions, 0 touching sp
-  probe_sel_lane    7 instructions, 0 touching sp
-  probe_sel_bits   29 instructions, 0 touching sp
-  probe_fma_4       3 instructions, 0 touching sp
-  probe_perm_4      9 instructions, 0 touching sp
-  probe_sel_4       2 instructions, 0 touching sp
+ABI probe (arm64): a value that IS one register must cross a call in it
+  probe_nat_fma         3 instructions, 0 touching sp
+  probe_nat_fma_f64     3 instructions, 0 touching sp
+  probe_nat_perm        9 instructions, 0 touching sp
+  probe_nat_add         2 instructions, 0 touching sp
+  probe_nat_sel         2 instructions, 0 touching sp
+  probe_nat_sel_f64     2 instructions, 0 touching sp
 ok: vectors and masks cross a call in their registers.
+  above one register (both ABIs pass these through memory -- informational):
+  probe_fma             7 instructions, 0 touching sp
+  probe_fma_f64        13 instructions, 0 touching sp
+  probe_perm           22 instructions, 0 touching sp
+  probe_sel_lane        7 instructions, 0 touching sp
+  probe_sel_bits       29 instructions, 0 touching sp
 ```
 
-Eight symbols, all enforced: any one of them touching the stack pointer fails the build and names
-the cause. A `static_assert` can do nothing about an ABI, and the regression changes no result,
-only the speed. Widening it from one probe to five was worth it immediately — two came out dirty,
-for two *different* reasons: `probe_sel_lane` was the mask ABI of § 3, and `probe_fma_f64` was not
-an ABI problem at all but a missing register variant at eight lanes of double, showing up in the
-same measurement.
+Six symbols enforced: any one of them touching the stack pointer fails the build and names the
+cause. A `static_assert` can do nothing about an ABI, and the regression changes no result, only
+the speed. Widening it from one probe to five was worth it immediately — two came out dirty, for
+two *different* reasons: `probe_sel_lane` was the mask ABI of § 3, and `probe_fma_f64` was not an
+ABI problem at all but a missing register variant at eight lanes of double, showing up in the same
+measurement.
 
-The ARM port added the last three and made the check **portable**, which it was not: the stack
-pointer is `sp` and not `%rsp`, Mach-O prefixes symbols with an underscore, and
-`--disassemble=` is a GNU binutils spelling that LLVM's objdump rejects. Left alone the probe
-would have passed on ARM by never matching anything — a green light that means nothing, which is
-worse than no check. The `_4` probes exist because eight lanes is one register on AVX2 and *two*
-on any ARM part, so without them nothing ever measured a value that fits in a single register.
+Every probe in the enforced set is written at `SimdSize<T>` and its mask flavour is *deduced* from
+what `gt` returns on the target — four lanes and a `__m128i` under SSE2, eight and a `__m256i`
+under AVX2, sixteen and a `__mmask16` under AVX-512, four and a `uint32x4_t` on ARM. Nothing in it
+names a width or a flavour, so it is one register everywhere by construction rather than by luck.
+That is the § 4 lesson: spelling `SimdMask<16,32>` asked AVX-512 for a 64-byte *lane* mask, a
+flavour it never produces.
+
+The ARM port also made the check **portable**, which it was not: the stack pointer is `sp` and not
+`%rsp`, Mach-O prefixes symbols with an underscore, `--disassemble=` is a GNU binutils spelling
+that LLVM's objdump rejects, and a frame pointer puts `%rsp` in a *clean* prologue (hence
+`-fomit-frame-pointer`). Left alone the probe would have passed on ARM by never matching
+anything.
 
 ## 6. Status
 
@@ -369,7 +399,7 @@ are in [FINDINGS.md](FINDINGS.md). Where it stood, and where it stands:
 | (operation, type, width) cells with a register form, x86 | 8 / 63 | **59 / 63** |
 | … ARM, reaching `REGISTER` or `SPLIT` rather than a lane loop | 0 / 63 | **60 / 63** |
 | operations returning wrong values | 5 | **0** |
-| values passed through memory across a call | 2 of 5 probes | **0 of 8 probes** |
+| values passed through memory across a call, at a width that IS one register | 2 of 5 probes | **0 of 6 enforced probes**, on 5 x86 levels and on ARM |
 | value assertions, per feature level | 29 (one level) | **1 797**, at 5 x86 levels and 6 ARM ones |
 | cells needing the compiler's vector extensions to be fast (the MSVC gap) | 12 / 168 | **4 / 196** on x86, all integer division; **2 / 196** on ARM, both a constant-folding artefact |
 | compilers the suite runs under | 1 | **gcc, clang, MSVC** |

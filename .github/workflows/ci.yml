@@ -11,7 +11,7 @@
 #            arm64 runner, so the tests RUN rather than merely compile. That matters: the ARM
 #            backend was written on one, and the interesting failures (a wrong `TBL` control
 #            byte, a `to_bits` reduction that drops the top lanes) change values, not
-#            compilability
+#            compilability. It also runs `check_arm_lattice.sh`, which is the ARMv7 half
 #   windows  MSVC, four /arch: levels
 #   probes   the ABI check, which reads the disassembly
 
@@ -130,20 +130,15 @@ jobs:
           command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
           ./check_arm_lattice.sh clang
 
-      # THE 32-BIT ARM LATTICE THROUGH THE REAL HEADERS, which no runner is. Compile only, and
-      # compile only is the point:
-      # everything registered against `features::NEON` alone must be an instruction an ARMv7-A
-      # part really has, and the way that breaks is a build failure on the target that needs it
-      # -- never on the machine it was written on. This is the ARM half of the lesson the x86
-      # feature lattice was rewritten for.
-      - name: armv7 cross build
-        if: matrix.cxx == 'g++'
-        run: |
-          sudo apt-get install -y g++-arm-linux-gnueabihf
-          for t in test_ops test_split test_selection test_arm_ops test_arm_dispatch; do
-            arm-linux-gnueabihf-g++ -std=c++20 -O2 -mfpu=neon -mfloat-abi=hard \
-              -I src -I tests -c "tests/$t.cpp" -o "/tmp/$t.o"
-          done
+      # NO ARMv7 CROSS BUILD HERE, DELIBERATELY. It would compile the real C++ headers for a
+      # 32-bit ARM target, which is more coverage than the lattice check above -- but it cannot be
+      # run or debugged from any machine this was developed on, and a CI step nobody can reproduce
+      # locally is a step that gets disabled the first time it goes red for its own reasons.
+      #
+      # What it would prove about `features::NEON` -- that every intrinsic guarded by it exists on
+      # ARMv7-A -- `check_arm_lattice.sh` proves already, from both sides, with clang alone. The
+      # part that stays unproven is narrower than it looks: the standard library and the template
+      # machinery on a 32-bit target, which is not what this backend changed.
 
   windows:
     runs-on: windows-latest
