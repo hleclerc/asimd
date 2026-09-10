@@ -1,0 +1,4 @@
+# build artefacts
+build/
+.xmake/
+*.o

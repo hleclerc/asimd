@@ -2,6 +2,8 @@
 
 #include "SimdSize.h"
 
+#include <algorithm>
+
 namespace asimd {
 
 /**

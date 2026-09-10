@@ -2,7 +2,13 @@
 
 #include "SimdMaskImpl_Generic.h"
 #include "ASIMD_DEBUG_ON_OP.h"
+#include "../support/common_types.h"
+#include "../support/VecValues.h"
 #include "../support/S.h"
+
+#include <type_traits>
+#include <algorithm>
+#include <bit>
 
 namespace asimd {
 template<class T,int size,class Arch> struct SimdVec;
@@ -33,32 +39,77 @@ struct SimdVecImpl<T,1,Arch> {
     } data;
 };
 
+/// DOES THIS IMPL HAVE A SPLIT VIEW? A splittable impl is a pair of halves and the generic forms
+/// recurse into them; a REGISTER impl deliberately has no `split` at all -- putting one in the
+/// union sends every vector through memory (see the comment on SIMD_VEC_IMPL_REG just below).
+///
+/// So the generic forms cannot simply recurse: at a register-backed width they must go through
+/// `values` instead. Before this trait existed they recursed unconditionally, which made every
+/// operation WITHOUT a register form a hard compile error rather than a slow path -- `.sum()`,
+/// `mul` and `div` on every integer type, the strided `iota`, `gather` and `scatter` below AVX2.
+template<class I>
+concept HasSplit = requires ( I i ) { i.data.split.v0; };
+
+/// ... and does it have a whole-vector `values` (the `vector_size` typedef of a register impl)
+/// that arithmetic can be applied to in one go, rather than a plain array?
+template<class I>
+concept HasVectorValues = requires ( I a, I b ) { { a.data.values + b.data.values }; };
+
 /// Helper to make Impl with a register
+// THE LAYOUT OF A REGISTER IMPL DECIDES THE ABI, hence the performance.
+//
+// The obvious form -- `union { T values[ SIZE ]; Split split; TREG reg; }` -- sends EVERY vector
+// through MEMORY as soon as it crosses a call. The SysV x86-64 rule: an aggregate larger than two
+// eightbytes is passed in registers only if the first eightbyte is SSE and ALL the following ones
+// are SSEUP. But `float[ 8 ]` classifies as SSE,SSE,SSE,SSE -- an array is not a vector -- and a
+// union takes the WORST class among its members. A `struct { __m128 v0, v1; }` is no better:
+// SSE,SSEUP,SSE,SSEUP, and the third eightbyte alone sends the whole thing back to memory.
+//
+// MEASURED, on a plain addition passed by value:
+//     bare `__m256`                            4 instructions, 0 memory accesses
+//     `union { vector; TREG; }`                4 instructions, 0
+//     `union { T[ SIZE ]; TREG; }`             8 instructions, 4
+//     `union { ...; Split; TREG; }`            8 instructions, 4
+//
+// Hence this form: `values` typed as a VECTOR (gcc/clang's `vector_size` extension, which keeps
+// `values[ i ]` indexing) and `Split` TAKEN OUT of the union. Operations with no register form
+// then go lane by lane through `values` rather than through the split.
+//
+// `tests/xmake.lua` checks this on every build -- a `static_assert` can do nothing about an ABI,
+// and the regression changes no result, only the speed, by a factor of two.
 #define SIMD_VEC_IMPL_REG( COND, T, SIZE, TREG ) \
     template<class Arch> requires ( Arch::template Has<features::COND>::value ) \
     struct SimdVecImpl<T,SIZE,Arch> { \
         static constexpr int split_size_0 = prev_pow_2( SIZE ); \
         static constexpr int split_size_1 = SIZE - split_size_0; \
-        struct Split { \
-            SimdVecImpl<T,split_size_0,Arch> v0; \
-            SimdVecImpl<T,split_size_1,Arch> v1; \
-        }; \
+        ASIMD_VALUES_TYPE( Values, T, SIZE ); \
         union { \
-            T     values[ SIZE ]; \
-            Split split; \
-            TREG  reg; \
+            Values values; \
+            TREG   reg; \
         } data; \
     }
 
 // at ------------------------------------------------------------------------
+//
+// BY VALUE, NOT BY REFERENCE, and that is forced. When `values` is a `vector_size` type there is
+// no object to bind a reference to: clang rejects `T &r = v.data.values[ i ]` outright ("non-const
+// reference cannot bind to vector element") where gcc allows it as an extension. So reading a
+// lane returns a copy -- it is one scalar -- and writing one goes through `set_at`.
 template<class T,int size,class Arch> HaD
-const T &at( const SimdVecImpl<T,size,Arch> &vec, int i ) {
+T at( const SimdVecImpl<T,size,Arch> &vec, int i ) {
     return vec.data.values[ i ];
 }
 
 template<class T,int size,class Arch> HaD
-T &at( SimdVecImpl<T,size,Arch> &vec, int i ) {
-    return vec.data.values[ i ];
+void set_at( SimdVecImpl<T,size,Arch> &vec, int i, T value ) {
+    vec.data.values[ i ] = value;
+}
+
+/// The address of lane 0, for `begin()` / `end()`. Same reason: `&vec.data.values[ 0 ]` is not
+/// something you may write on a vector type, and the union is contiguous anyway.
+template<class T,int size,class Arch> HaD
+const T *lane_ptr( const SimdVecImpl<T,size,Arch> &vec ) {
+    return reinterpret_cast<const T *>( &vec.data );
 }
 
 // init ----------------------------------------------------------------------
@@ -97,10 +148,20 @@ void init_sc( SimdVecImpl<T,size,Arch> &vec, G a, G b ) {
     vec.data.values[ 1 ] = b;
 }
 
+/// THE SCALAR BROADCAST, and it has to go through the split like everything else. Written as a
+/// loop over `values` it wrote 32 floats to memory one at a time for a `SimdVec<float,32>` --
+/// 25 instructions where two `vbroadcastss` do the job -- because a splittable impl stores a real
+/// array and there was no register form to reach at that width. Recursing lands on
+/// SIMD_VEC_IMPL_REG_INIT_1 at each half instead.
 template<class T,int size,class Arch,class G> HaD
 void init_sc( SimdVecImpl<T,size,Arch> &vec, G a ) {
-    for( int i = 0; i < size; ++i )
-        vec.data.values[ i ] = a;
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init_sc( vec.data.split.v0, a );
+        init_sc( vec.data.split.v1, a );
+    } else {
+        for( int i = 0; i < size; ++i )
+            vec.data.values[ i ] = a;
+    }
 }
 
 template<class T,int size,int part,class Arch> HaD
@@ -148,8 +209,13 @@ void prefetch( const void *, N_len, S_Arch ) {
 template<class G,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> load_unaligned( const G *data, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = load_unaligned( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = load_unaligned( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = load_unaligned( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = load_unaligned( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = data[ i ];
+    }
     return res;
 }
 
@@ -176,8 +242,13 @@ SimdVecImpl<T,1,Arch> load_unaligned( const G *data, S<SimdVecImpl<T,1,Arch>> ) 
 template<class G,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> load_aligned( const G *data, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = load_aligned( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = load_aligned( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = load_aligned( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = load_aligned( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = data[ i ];
+    }
     return res;
 }
 
@@ -191,8 +262,13 @@ SimdVecImpl<T,1,Arch> load_aligned( const G *data, S<SimdVecImpl<T,1,Arch>> ) {
 template<class G,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> load_aligned_stream( const G *data, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = load_aligned_stream( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = load_aligned_stream( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = load_aligned_stream( data                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = load_aligned_stream( data + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = data[ i ];
+    }
     return res;
 }
 
@@ -206,8 +282,14 @@ SimdVecImpl<T,1,Arch> load_aligned_stream( const G *data, S<SimdVecImpl<T,1,Arch
 template<class P,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> load( const P &data, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = load( data                                              , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = load( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = load( data                                              , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = load( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        const auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = p[ i ];
+    }
     return res;
 }
 
@@ -221,8 +303,14 @@ SimdVecImpl<T,1,Arch> load( const P &data, S<SimdVecImpl<T,1,Arch>> ) {
 template<class P,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> load_stream( const P &data, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = load_stream( data                                              , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = load_stream( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = load_stream( data                                              , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = load_stream( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        const auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = p[ i ];
+    }
     return res;
 }
 
@@ -266,8 +354,13 @@ SimdVecImpl<T,1,Arch> load_stream( const P &data, S<SimdVecImpl<T,1,Arch>> ) {
 // store and init unaligned -----------------------------------------------------------------------
 template<class G,class T,int size,class Arch> HaD
 void store_unaligned( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    store_unaligned( data                    , impl.data.split.v0 );
-    store_unaligned( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        store_unaligned( data                    , impl.data.split.v0 );
+        store_unaligned( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            data[ i ] = impl.data.values[ i ];
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -277,8 +370,13 @@ void store_unaligned( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class G,class T,int size,class Arch> HaD
 void init_unaligned( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    init_unaligned( data                    , impl.data.split.v0 );
-    init_unaligned( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init_unaligned( data                    , impl.data.split.v0 );
+        init_unaligned( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            new ( data + i ) G( impl.data.values[ i ] );
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -299,8 +397,13 @@ void init_unaligned( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 // store and init aligned -----------------------------------------------------------------------
 template<class G,class T,int size,class Arch> HaD
 void store_aligned( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    store_aligned( data                    , impl.data.split.v0 );
-    store_aligned( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        store_aligned( data                    , impl.data.split.v0 );
+        store_aligned( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            data[ i ] = impl.data.values[ i ];
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -310,8 +413,14 @@ void store_aligned( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class P,class T,int size,class Arch> HaD
 void store( const P &data, const SimdVecImpl<T,size,Arch> &impl ) {
-    store( data                         , impl.data.split.v0 );
-    store( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        store( data                         , impl.data.split.v0 );
+        store( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    } else {
+        auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            p[ i ] = impl.data.values[ i ];
+    }
 }
 
 template<class P,class T,class Arch> HaD
@@ -321,8 +430,13 @@ void store( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class G,class T,int size,class Arch> HaD
 void store_aligned_stream( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    store_aligned_stream( data                    , impl.data.split.v0 );
-    store_aligned_stream( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        store_aligned_stream( data                    , impl.data.split.v0 );
+        store_aligned_stream( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            data[ i ] = impl.data.values[ i ];
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -332,8 +446,14 @@ void store_aligned_stream( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class P,class T,int size,class Arch> HaD
 void store_stream( const P &data, const SimdVecImpl<T,size,Arch> &impl ) {
-    store_stream( data                                              , impl.data.split.v0 );
-    store_stream( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        store_stream( data                                              , impl.data.split.v0 );
+        store_stream( data + N<SimdVecImpl<T,size,Arch>::split_size_0>(), impl.data.split.v1 );
+    } else {
+        auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            p[ i ] = impl.data.values[ i ];
+    }
 }
 
 template<class P,class T,class Arch> HaD
@@ -343,8 +463,13 @@ void store_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class G,class T,int size,class Arch> HaD
 void init_aligned( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    init_aligned( data                    , impl.data.split.v0 );
-    init_aligned( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init_aligned( data                    , impl.data.split.v0 );
+        init_aligned( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            new ( data + i ) G( impl.data.values[ i ] );
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -354,8 +479,15 @@ void init_aligned( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class P,class T,int size,class Arch> HaD
 void init( const P &data, const SimdVecImpl<T,size,Arch> &impl ) {
-    init( data                         , impl.data.split.v0 );
-    init( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init( data                         , impl.data.split.v0 );
+        init( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    } else {
+        using G = typename std::decay<decltype( *data )>::type;
+        auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            new ( p + i ) G( impl.data.values[ i ] );
+    }
 }
 
 template<class P,class T,class Arch> HaD
@@ -366,8 +498,13 @@ void init( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class G,class T,int size,class Arch> HaD
 void init_aligned_stream( G *data, const SimdVecImpl<T,size,Arch> &impl ) {
-    init_aligned_stream( data                    , impl.data.split.v0 );
-    init_aligned_stream( data + impl.split_size_0, impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init_aligned_stream( data                    , impl.data.split.v0 );
+        init_aligned_stream( data + impl.split_size_0, impl.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            new ( data + i ) G( impl.data.values[ i ] );
+    }
 }
 
 template<class G,class T,class Arch> HaD
@@ -377,8 +514,15 @@ void init_aligned_stream( G *data, const SimdVecImpl<T,1,Arch> &impl ) {
 
 template<class P,class T,int size,class Arch> HaD
 void init_stream( const P &data, const SimdVecImpl<T,size,Arch> &impl ) {
-    init_stream( data                         , impl.data.split.v0 );
-    init_stream( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        init_stream( data                         , impl.data.split.v0 );
+        init_stream( data + N<impl.split_size_0>(), impl.data.split.v1 );
+    } else {
+        using G = typename std::decay<decltype( *data )>::type;
+        auto *p = data.get();
+        for ( int i = 0; i < size; ++i )
+            new ( p + i ) G( impl.data.values[ i ] );
+    }
 }
 
 template<class P,class T,class Arch> HaD
@@ -424,12 +568,34 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     }
 
 // arithmetic operations -------------------------------------------------------------
+//
+// THREE BRANCHES, chosen at compile time, and the middle one is the reason this is not just a
+// recursion any more:
+//
+//   `split`         a splittable impl is a pair of halves -- recurse into them.
+//   whole `values`  a REGISTER impl has no split (README section 3) but its `values` IS a vector
+//                   type, so the operation applies to it in one go. gcc and clang lower that to
+//                   the right instruction on their own, which is how `SI32 x 8` gets a `vpmulld`
+//                   without anybody registering a `mul` backend for it.
+//   lane by lane    everything else, including the one-lane tail of an odd width.
+//
+// Before this, the first branch was unconditional. At a register-backed width, an operation with
+// no register form was therefore a HARD COMPILE ERROR rather than a slow path: `.sum()`, `mul`
+// and `div` on every integer type, the strided `iota`, `gather` and `scatter` below AVX2. That
+// was 150 of the 408 cells of `tests/compile_matrix.sh`.
 #define SIMD_VEC_IMPL_ARITHMETIC_OP( NAME, OP ) \
     template<class T,int size,class Arch> HaD \
     SimdVecImpl<T,size,Arch> NAME( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
         SimdVecImpl<T,size,Arch> res; \
-        res.data.split.v0 = NAME( a.data.split.v0, b.data.split.v0 ); \
-        res.data.split.v1 = NAME( a.data.split.v1, b.data.split.v1 ); \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) { \
+            res.data.split.v0 = NAME( a.data.split.v0, b.data.split.v0 ); \
+            res.data.split.v1 = NAME( a.data.split.v1, b.data.split.v1 ); \
+        } else if constexpr ( requires { a.data.values OP b.data.values; } ) { \
+            res.data.values = a.data.values OP b.data.values; \
+        } else { \
+            for ( int i = 0; i < size; ++i ) \
+                res.data.values[ i ] = a.data.values[ i ] OP b.data.values[ i ]; \
+        } \
         return res; \
     } \
     \
@@ -441,13 +607,47 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     }
 
     SIMD_VEC_IMPL_ARITHMETIC_OP( sll, << )
-    SIMD_VEC_IMPL_ARITHMETIC_OP( anb, &  )
     SIMD_VEC_IMPL_ARITHMETIC_OP( add, +  )
     SIMD_VEC_IMPL_ARITHMETIC_OP( sub, -  )
     SIMD_VEC_IMPL_ARITHMETIC_OP( mul, *  )
     SIMD_VEC_IMPL_ARITHMETIC_OP( div, /  )
 
 #undef SIMD_VEC_IMPL_ARITHMETIC_OP
+
+/// `and` is a BITWISE operation, so on a floating point type it is neither `a & b` (ill-formed)
+/// nor an arithmetic and: it is an and on the bit patterns. `SimdVec<float,5> & ...` used to fail
+/// to compile for exactly that reason -- the one-lane tail of the split reached `float & float`.
+template<class T> HaD
+T lane_and( T a, T b ) {
+    if constexpr ( std::is_integral<T>::value ) {
+        return a & b;
+    } else {
+        using U = typename PI_<8 * sizeof( T )>::T;
+        return std::bit_cast<T>( U( std::bit_cast<U>( a ) & std::bit_cast<U>( b ) ) );
+    }
+}
+
+template<class T,int size,class Arch> HaD
+SimdVecImpl<T,size,Arch> anb( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) {
+    SimdVecImpl<T,size,Arch> res;
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = anb( a.data.split.v0, b.data.split.v0 );
+        res.data.split.v1 = anb( a.data.split.v1, b.data.split.v1 );
+    } else if constexpr ( requires { a.data.values & b.data.values; } ) {
+        res.data.values = a.data.values & b.data.values;
+    } else {
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = lane_and( T( a.data.values[ i ] ), T( b.data.values[ i ] ) );
+    }
+    return res;
+}
+
+template<class T,class Arch> HaD
+SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1,Arch> &b ) {
+    SimdVecImpl<T,1,Arch> res;
+    res.data.values[ 0 ] = lane_and( a.data.values[ 0 ], b.data.values[ 0 ] );
+    return res;
+}
 
 #define SIMD_VEC_IMPL_REG_ARITHMETIC_OP( COND, T, SIZE, NAME, FUNC ) \
     template<class Arch> requires ( Arch::template Has<features::COND>::value ) HaD \
@@ -461,8 +661,14 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     template<class T,int size,class Arch> HaD \
     SimdMaskImpl<size,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
         SimdMaskImpl<size,1,Arch> res; \
-        res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); \
-        res.data.split.v1 = NAME##_as_a_simd_mask( a.data.split.v1, b.data.split.v1 ); \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdMaskImpl<size,1,Arch>> ) { \
+            res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); \
+            res.data.split.v1 = NAME##_as_a_simd_mask( a.data.split.v1, b.data.split.v1 ); \
+        } else { \
+            res.data.values.set_value( false ); \
+            for ( int i = 0; i < size; ++i ) \
+                if ( a.data.values[ i ] OP b.data.values[ i ] ) res.data.values.set_bit( i ); \
+        } \
         return res; \
     } \
     template<class T,class Arch> HaD \
@@ -502,8 +708,13 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
     template<class T,int size,class Arch,class I> HaD \
     SimdVecImpl<I,size,Arch> NAME##_as_a_simd_vec( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b, S<SimdVecImpl<I,size,Arch>> ) { \
         SimdVecImpl<I,size,Arch> res; \
-        res.data.split.v0 = NAME##_as_a_simd_vec( a.data.split.v0, b.data.split.v0, S<SimdVecImpl<I,a.split_size_0,Arch>>() ); \
-        res.data.split.v1 = NAME##_as_a_simd_vec( a.data.split.v1, b.data.split.v1, S<SimdVecImpl<I,a.split_size_1,Arch>>() ); \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdVecImpl<I,size,Arch>> ) { \
+            res.data.split.v0 = NAME##_as_a_simd_vec( a.data.split.v0, b.data.split.v0, S<SimdVecImpl<I,a.split_size_0,Arch>>() ); \
+            res.data.split.v1 = NAME##_as_a_simd_vec( a.data.split.v1, b.data.split.v1, S<SimdVecImpl<I,a.split_size_1,Arch>>() ); \
+        } else { \
+            for ( int i = 0; i < size; ++i ) \
+                res.data.values[ i ] = a.data.values[ i ] OP b.data.values[ i ] ? ~I( 0 ) : I( 0 ); \
+        } \
         return res; \
     } \
     template<class T,class Arch,class I> HaD \
@@ -543,11 +754,17 @@ SIMD_VEC_IMPL_CMP_OP( gt, > )
     }
 
 // iota( beg ) --------------------------------------------------------------------------
+//
+// THROUGH `values`, NO LONGER THROUGH `split`. A register impl has no split view any more -- it
+// used to send the whole vector back to memory (see the comment on `SIMD_VEC_IMPL_REG`) -- and
+// since `values` is now a VECTOR type, writing it element by element folds to a constant at
+// compile time. Register forms live in `SimdVecImpl_AVX.h` and `_AVX2.h`: without them gcc
+// materializes this loop as a chain of `vpinsrd` instead of a constant load.
 template<class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> iota( T beg, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = iota( beg                                         , S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = iota( beg + SimdVecImpl<T,size,Arch>::split_size_0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    for ( int i = 0; i < size; ++i )
+        res.data.values[ i ] = beg + T( i );
     return res;
 }
 
@@ -562,8 +779,15 @@ SimdVecImpl<T,1,Arch> iota( T beg, S<SimdVecImpl<T,1,Arch>> ) {
 template<class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> iota( T beg, T mul, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = iota( beg                                               , mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = iota( beg + SimdVecImpl<T,size,Arch>::split_size_0 * mul, mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        res.data.split.v0 = iota( beg                                               , mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = iota( beg + SimdVecImpl<T,size,Arch>::split_size_0 * mul, mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        // as for `iota( beg )`: written through `values`, which is a vector type here, so the
+        // whole thing folds to a constant load plus one multiply-add at compile time.
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = beg + T( i ) * mul;
+    }
     return res;
 }
 
@@ -577,7 +801,25 @@ SimdVecImpl<T,1,Arch> iota( T beg, T /*mul*/, S<SimdVecImpl<T,1,Arch>> ) {
 // sum -----------------------------------------------------------------------------
 template<class T,int size,class Arch> HaD
 T horizontal_sum( const SimdVecImpl<T,size,Arch> &impl ) {
-    return horizontal_sum( impl.data.split.v0 ) + horizontal_sum( impl.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
+        // ADD THE HALVES FIRST, then reduce once -- not reduce twice and add the scalars. When
+        // the two halves have the same width that is one vector add plus one ladder, against two
+        // ladders: measured 17 instructions down to 9 on `float x 8` under SSE2.
+        constexpr int n0 = SimdVecImpl<T,size,Arch>::split_size_0;
+        constexpr int n1 = SimdVecImpl<T,size,Arch>::split_size_1;
+        if constexpr ( n0 == n1 )
+            return horizontal_sum( add( impl.data.split.v0, impl.data.split.v1 ) );
+        else
+            return horizontal_sum( impl.data.split.v0 ) + horizontal_sum( impl.data.split.v1 );
+    } else {
+        // pairwise rather than a running accumulator: same instruction count on an integer type,
+        // and a shorter dependency chain plus a reproducible order on a floating point one.
+        T acc[ size ];
+        for ( int i = 0; i < size; ++i ) acc[ i ] = impl.data.values[ i ];
+        for ( int n = size; n > 1; n = ( n + 1 ) / 2 )
+            for ( int i = 0; i < n / 2; ++i ) acc[ i ] += acc[ i + ( n + 1 ) / 2 ];
+        return acc[ 0 ];
+    }
 }
 
 template<class T,class Arch> HaD
@@ -585,11 +827,31 @@ T horizontal_sum( const SimdVecImpl<T,1,Arch> &impl ) {
     return impl.data.values[ 0 ];
 }
 
+/// Builds an impl from a bare register. Brace-initialising the union would hit its FIRST member,
+/// `values`, not `reg` -- which silently works for the float types (the vector typedef and the
+/// intrinsic type are compatible) and does not compile for the integer ones.
+template<class Impl,class R> HaD
+Impl impl_from_reg( R r ) { Impl res; res.data.reg = r; return res; }
+
+/// A register form for the horizontal sum. There was none, at any width or any type: `.sum()` on
+/// eight floats was 44 instructions, because a pairwise tree written over `values[ i ]` uses no
+/// vector arithmetic and neither compiler can put it back together.
+#define SIMD_VEC_IMPL_REG_HSUM( COND, T, SIZE, FUNC ) \
+    template<class Arch> requires ( Arch::template Has<features::COND>::value ) HaD \
+    T horizontal_sum( const SimdVecImpl<T,SIZE,Arch> &impl ) { \
+        ASIMD_DEBUG_ON_OP("horizontal_sum",#COND,#FUNC) return FUNC; \
+    }
+
 // scatter/gather -----------------------------------------------------------------------
 template<class G,class V,class T,int size,class Arch> HaD
 void scatter( G *ptr, const V &ind, const SimdVecImpl<T,size,Arch> &vec ) {
-    scatter( ptr, ind.data.split.v0, vec.data.split.v0 );
-    scatter( ptr, ind.data.split.v1, vec.data.split.v1 );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<V> ) {
+        scatter( ptr, ind.data.split.v0, vec.data.split.v0 );
+        scatter( ptr, ind.data.split.v1, vec.data.split.v1 );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            ptr[ ind.data.values[ i ] ] = vec.data.values[ i ];
+    }
 }
 
 template<class G,class V,class T,class Arch> HaD
@@ -607,8 +869,13 @@ void scatter( G *ptr, const V &ind, const SimdVecImpl<T,1,Arch> &vec ) {
 template<class G,class V,class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> gather( const G *data, const V &ind, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
-    res.data.split.v0 = gather( data, ind.data.split.v0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-    res.data.split.v1 = gather( data, ind.data.split.v1, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<V> ) {
+        res.data.split.v0 = gather( data, ind.data.split.v0, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = gather( data, ind.data.split.v1, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+    } else {
+        for ( int i = 0; i < size; ++i )
+            res.data.values[ i ] = data[ ind.data.values[ i ] ];
+    }
     return res;
 }
 
@@ -629,9 +896,15 @@ SimdVecImpl<T,1,Arch> gather( const G *data, const V &ind, S<SimdVecImpl<T,1,Arc
 #define SIMD_VEC_IMPL_ARITHMETIC_FUNC( NAME, HELPER ) \
     template<class T,int size,class Arch> HaD \
     SimdVecImpl<T,size,Arch> NAME( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
+        HELPER; \
         SimdVecImpl<T,size,Arch> res; \
-        res.data.split.v0 = NAME( a.data.split.v0, b.data.split.v0 ); \
-        res.data.split.v1 = NAME( a.data.split.v1, b.data.split.v1 ); \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) { \
+            res.data.split.v0 = NAME( a.data.split.v0, b.data.split.v0 ); \
+            res.data.split.v1 = NAME( a.data.split.v1, b.data.split.v1 ); \
+        } else { \
+            for ( int i = 0; i < size; ++i ) \
+                res.data.values[ i ] = NAME( T( a.data.values[ i ] ), T( b.data.values[ i ] ) ); \
+        } \
         return res; \
     } \
     \

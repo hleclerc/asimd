@@ -4,6 +4,7 @@
 
 #include "../support/prev_pow_2.h"
 #include "../support/BitVec.h"
+#include "../support/VecValues.h"
 #include "../support/HaD.h"
 
 namespace asimd {
@@ -26,7 +27,7 @@ struct SimdMaskImpl<nb_items,item_size,Arch> {
     };
   
     union {
-        PI_<item_size>::T values[ nb_items ];
+        typename PI_<item_size>::T values[ nb_items ];
         Split split;
     } data;
 };
@@ -36,7 +37,7 @@ template<int nb_items,int item_size,class Arch> requires ( item_size >= 8 && nb_
 struct SimdMaskImpl<nb_items,item_size,Arch> {
     static constexpr int splittable = 0;
     union {
-        PI_<item_size>::T values[ nb_items ];
+        typename PI_<item_size>::T values[ nb_items ];
     } data;
 };
 
@@ -67,20 +68,26 @@ struct SimdMaskImpl<nb_items,item_size,Arch> {
 };
 
 
-/// Helper to make a SimdMaskImpl with a register. Version where mask values are stored in integer with size >= 8 bits
+/// Helper to make a SimdMaskImpl with a register. Version where mask values are stored in integer
+/// with size >= 8 bits.
+///
+/// SAME ABI RULE AS `SIMD_VEC_IMPL_REG`, and it was not applied here. This union used to hold
+/// `PI32 values[ 8 ]` AND a `Split`: four eightbytes classified SSE,SSE,SSE,SSE, so every
+/// lane-flavoured mask crossing a call went through MEMORY. Measured by `tests/abi_probe.cpp`, on
+/// a `select` taking its mask by value: 9 instructions with 3 stack accesses, against 4 and 0
+/// once the array became a vector type and `Split` left the union.
+///
+/// Dropping `Split` costs nothing: the only generic form that recursed into a mask split does so
+/// on the BIT flavour, and is guarded by `HasSplit` anyway.
 #define SIMD_MASK_IMPL_REG_LARGE( COND, NB_ITEMS, ITEM_SIZE, TREG ) \
     template<class Arch> requires ( Arch::template Has<features::COND>::value ) \
     struct SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> { \
         static constexpr int split_size_0 = prev_pow_2( NB_ITEMS ); \
         static constexpr int split_size_1 = NB_ITEMS - split_size_0; \
-        struct Split { \
-            SimdMaskImpl<NB_ITEMS/2,ITEM_SIZE,Arch> v0; \
-            SimdMaskImpl<NB_ITEMS/2,ITEM_SIZE,Arch> v1; \
-        }; \
+        ASIMD_VALUES_TYPE( Values, PI##ITEM_SIZE, NB_ITEMS ); \
         union { \
-            PI##ITEM_SIZE values[ NB_ITEMS ]; \
-            Split split; \
-            TREG reg; \
+            Values values; \
+            TREG   reg; \
         } data; \
     };
 
@@ -149,19 +156,32 @@ bool at( const SimdMaskImpl<nb_items,item_size,Arch> &mask, int i ) {
 }
 
 // any, all ------------------------------------------------------------------
-// template<int nb_items,int item_size,class Arch> HaD
-// bool any( const SimdMaskImpl<nb_items,item_size,Arch> &mask )  {
-//     return mask.data.values.any();
-// }
-
-template<int nb_items,class Arch> HaD
-bool any( const SimdMaskImpl<nb_items,1,Arch> &mask )  {
-    return mask.data.values.any();
+//
+// TWO FLAVOURS OF MASK, and the generic reductions have to serve both. The bit flavour stores a
+// `BitVec`, which carries its own `any`/`all`; the LANE flavour stores a plain array of
+// all-ones/all-zeros words, which does not. `all` used to call `values.all()` unconditionally --
+// a hard compile error on every lane mask with no register reduction, e.g. `SimdMaskImpl<16,32>`
+// -- and `any` was declared only for the bit flavour, so it did not resolve at all there.
+template<int nb_items,int item_size,class Arch> HaD
+bool any( const SimdMaskImpl<nb_items,item_size,Arch> &mask ) {
+    if constexpr ( item_size == 1 ) {
+        return mask.data.values.any();
+    } else {
+        for ( int i = 0; i < nb_items; ++i )
+            if ( mask.data.values[ i ] ) return true;
+        return false;
+    }
 }
 
 template<int nb_items,int item_size,class Arch> HaD
-bool all( const SimdMaskImpl<nb_items,item_size,Arch> &mask )  {
-    return mask.data.values.all();
+bool all( const SimdMaskImpl<nb_items,item_size,Arch> &mask ) {
+    if constexpr ( item_size == 1 ) {
+        return mask.data.values.all();
+    } else {
+        for ( int i = 0; i < nb_items; ++i )
+            if ( ! mask.data.values[ i ] ) return false;
+        return true;
+    }
 }
 
 #define SIMD_MASK_IMPL_REG_REDUCTION( COND, NB_ITEMS, ITEM_SIZE, NAME, FUNC ) \

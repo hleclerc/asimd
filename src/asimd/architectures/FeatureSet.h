@@ -2,7 +2,8 @@
 
 #include "../support/S.h"
 #include "../support/N.h"
-//#include <utility>
+#include <algorithm>
+#include <cstdint>
 #include <string>
 
 namespace asimd {

@@ -1,11 +1,13 @@
 #pragma once
 
-#include "internal/N.h"
+#include "support/N.h"
+#include "SimdSize.h"
 #include "SimdAlig.h"
 #include "SimdVec.h"
 #include "Ptr.h"
 
 namespace asimd {
+
 
 /**
   Ptrs must contain
@@ -18,7 +20,13 @@ struct SimdRangePtr {
     /// Version with beg % size assumed to be 0
     template<class TI,class Func,class... Ptrs>
     static void for_each_with_beg_aligned( TI beg, TI end, Func &&func, Ptrs... /*ptrs*/ ) {
-        _fewba( beg, end, std::forward<Func>( func ), N<( Ptrs::alignment >= SimdAlig<typename Ptrs::T,Arch>::value )>()... );
+        // `Ptrs::T` did not exist -- the member `PtrFromRawPtr` declares is `pointed_type` --
+        // and `SimdAlig` takes <T, simd_size, Arch>, not <T, Arch>. Neither showed up because
+        // this header had a stale include and could not be compiled at all.
+        _fewba( beg, end, std::forward<Func>( func ),
+                N<( Ptrs::alignment >= SimdAlig<typename Ptrs::pointed_type,
+                                                SimdSize<typename Ptrs::pointed_type,Arch>::value,
+                                                Arch>::value )>()... );
     }
 
 private:

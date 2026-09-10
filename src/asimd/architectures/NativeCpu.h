@@ -1,36 +1,103 @@
 #pragma once
 
+#include "GenericFeatures.h"
 #include "X86Cpu.h"
 #include "ArmCpu.h"
+#include "ScalarCpu.h"
 
 namespace asimd {
 
+// =============================================================================================
+// THE NATIVE ARCHITECTURE, deduced from what the compiler says it is targeting.
+//
+// TWO THINGS THIS FILE HAS TO GET RIGHT, and neither is obvious:
+//
+//   MSVC DOES NOT DEFINE `__SSE2__`, EVER. It defines `_M_X64` / `_M_IX86_FP`, and defines
+//   `__AVX__` / `__AVX2__` / `__AVX512F__` only under the matching `/arch:`. Deducing the
+//   feature set from `__SSE2__` alone therefore gave MSVC x64 an EMPTY feature set -- every
+//   operation silently scalar, which is the exact failure `Selection.h` exists to prevent, on
+//   one of the three compilers this has to build with. On x86-64, SSE2 is architectural.
+//
+//   AN UNKNOWN TARGET MUST STILL COMPILE. There used to be no `#else`: on anything that was
+//   neither x86 nor Apple's `__arm64__`, `NativeCpu` was simply not declared, and every
+//   translation unit that included the library failed. `ScalarCpu` is the honest answer -- one
+//   lane, everything through the generic forms -- and it is what makes each new backend
+//   ADDITIVE rather than a precondition.
+// =============================================================================================
 
-// -------------------------- Native --------------------------
-// x86
-#if ( defined(_M_IX86) || defined(__i386__) || defined(_M_X64) || defined(__x86_64__) )
+// -------------------------- x86 / x86-64 --------------------------
+#if defined( _M_X64 ) || defined( _M_IX86 ) || defined( __i386__ ) || defined( __x86_64__ )
+
+    // SSE / SSE2 are architectural on x86-64; on 32-bit they need /arch: or -msse2.
+    #if defined( __x86_64__ ) || defined( _M_X64 ) || defined( __SSE2__ ) || ( defined( _M_IX86_FP ) && _M_IX86_FP >= 2 )
+        #define ASIMD_HAS_SSE2 1
+    #endif
+
 using NativeCpu = X86Cpu< 8 * sizeof( void * )
     #ifdef __AVX512F__
         , features::AVX512
+    #endif
+    #ifdef __AVX512VL__
+        , features::AVX512VL
+    #endif
+    #ifdef __AVX512BW__
+        , features::AVX512BW
+    #endif
+    #ifdef __AVX512DQ__
+        , features::AVX512DQ
     #endif
     #ifdef __AVX2__
         , features::AVX2
     #endif
     #ifdef __AVX__
-       , features::AVX
+        , features::AVX
     #endif
-    #ifdef __SSE2__
-       , features::SSE2
+    #if defined( __FMA__ ) || ( defined( _MSC_VER ) && defined( __AVX2__ ) ) // MSVC folds FMA into /arch:AVX2
+        , features::FMA
     #endif
-    #ifdef __SSE__
-       , features::SSE
+    #if defined( __SSE4_2__ ) || ( defined( _MSC_VER ) && defined( __AVX__ ) )
+        , features::SSE4_2
+    #endif
+    #if defined( __SSE4_1__ ) || ( defined( _MSC_VER ) && defined( __AVX__ ) )
+        , features::SSE4_1
+    #endif
+    #if defined( __SSSE3__ ) || ( defined( _MSC_VER ) && defined( __AVX__ ) )
+        , features::SSSE3
+    #endif
+    #if defined( __SSE3__ ) || ( defined( _MSC_VER ) && defined( __AVX__ ) )
+        , features::SSE3
+    #endif
+    #ifdef ASIMD_HAS_SSE2
+        , features::SSE2
+        , features::SSE
     #endif
 >;
-#endif 
 
-#if ( defined( __arm64__ ) )
+// -------------------------- ARM / AArch64 --------------------------
+// `__arm64__` alone was Apple's spelling: gcc and clang on Linux use `__aarch64__`, MSVC uses
+// `_M_ARM64`, so the branch was unreachable anywhere else.
+#elif defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 ) || defined( _M_ARM64EC )
+
 using NativeCpu = ArmCpu< 8 * sizeof( void * )
+    // NEON is architectural on AArch64. The backends (`SimdVecImpl_Neon.h`, `SimdMaskImpl_Neon.h`)
+    // do not exist yet, so this declares the width and everything runs through the generic forms
+    // -- correct, and measurably slower. See the README.
+    , features::NEON
 >;
+
+#elif defined( __arm__ ) || defined( _M_ARM )
+
+using NativeCpu = ArmCpu< 8 * sizeof( void * )
+    #ifdef __ARM_NEON
+        , features::NEON
+    #endif
+>;
+
+// -------------------------- anything else --------------------------
+#else
+
+using NativeCpu = ScalarCpu< 8 * sizeof( void * ) >;
+
 #endif
 
 } // namespace asimd

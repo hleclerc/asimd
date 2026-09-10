@@ -2,6 +2,8 @@
 
 #include "FeatureSet.h"
 
+#include <algorithm>
+
 namespace asimd {
 
 namespace features {

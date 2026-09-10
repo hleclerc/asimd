@@ -1,0 +1,98 @@
+# asimd's CI. The point is NOT that it builds -- it is that it builds the same on three compilers
+# and at every feature level, because the failures this library actually has are exactly those:
+# an intrinsic guarded by the wrong feature macro compiles fine on a machine that has everything
+# and not at all on the target that needs it, and MSVC has neither `vector_size` nor the `__SSE2__`
+# spelling the whole feature detection used to be written against.
+#
+# Three jobs:
+#   linux    gcc and clang, five ISA levels, plus the compile map and the MSVC-path simulation
+#   windows  MSVC, four /arch: levels
+#   probes   the ABI check, which reads the disassembly and is gcc/objdump-specific
+
+name: ci
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [ g++, clang++ ]
+    name: linux / ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang
+        if: matrix.cxx == 'clang++'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: compiler version
+        run: ${{ matrix.cxx }} --version
+
+      # Every test binary, built and RUN at five x86 feature levels plus two with the compiler's
+      # vector extensions switched off -- which is MSVC's situation, reproduced on a compiler that
+      # has them. `make` alone only ever builds for the runner, so the SSE2 and AVX paths, the
+      # ones most likely to rot, would never be touched.
+      - name: tests, every ISA level
+        working-directory: tests
+        run: ./run_all_isa.sh ${{ matrix.cxx }}
+
+      # 408 translation units: one per (operation, type, ISA). A coverage hole that is a *compile*
+      # error is invisible from a test binary, so it needs its own pass.
+      - name: compile map
+        working-directory: tests
+        run: |
+          ./compile_matrix.sh ${{ matrix.cxx }} | tee /tmp/matrix.txt
+          grep -q "^0 of .* do not compile" /tmp/matrix.txt
+
+      # What the dispatch table is worth on its own, in instructions. Informational: the only
+      # cells expected to move are integer division, which x86 has no SIMD instruction for.
+      - name: dispatch table vs. compiler vectors
+        if: matrix.cxx == 'g++'
+        working-directory: tests
+        run: ./no_vecext.sh
+
+  windows:
+    runs-on: windows-latest
+    name: windows / msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: compiler version
+        run: cl 2>&1 | Select-Object -First 1
+        shell: pwsh
+
+      # SSE2 / AVX / AVX2 are built and run; AVX-512 is built only, because the hosted runners do
+      # not guarantee the instruction set and a /arch:AVX512 binary faults without it. Compiling
+      # still exercises every AVX-512 backend.
+      - name: "tests, every /arch: level"
+        shell: pwsh
+        run: pwsh tests/run_msvc.ps1
+
+  probes:
+    runs-on: ubuntu-latest
+    name: linux / abi probe
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install xmake
+        run: |
+          sudo add-apt-repository -y ppa:xmake-io/xmake
+          sudo apt-get update && sudo apt-get install -y xmake
+
+      # Reads the disassembly and counts the instructions that touch %rsp. A value that starts
+      # going through memory changes no result and costs a factor of two, so no assertion can see
+      # it -- this is the only check that can, and it fails the build.
+      - name: abi probe and tests
+        working-directory: tests
+        run: make

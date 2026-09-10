@@ -23,6 +23,8 @@ public:
  
     void          set_value   ( bool a ) { if ( a ) for_each_int( []( auto &v, auto m ) { v = m; } ); else for_each_int( []( auto &v, auto ) { v = 0; } ); }
  
+    void          set_bit     ( int index, bool a = true ) { PI8 m = PI8( 1 ) << ( index % 8 ); if ( a ) data[ index / 8 ] |= m; else data[ index / 8 ] &= PI8( ~m ); }
+ 
     bool          operator[]  ( int index ) const { return data[ index / 8 ] & ( 1 << ( index % 8 ) ); }
     constexpr int size        () const { return nb_items; }
 

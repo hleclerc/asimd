@@ -2,7 +2,7 @@
 #define ASIMD_Integer_H
 
 #include <algorithm>
-#include "N.h"
+#include "N.h" // declares `Int` (with its default argument) to break the include cycle
 
 namespace asimd {
 
@@ -10,7 +10,7 @@ namespace asimd {
   Pointer with integer value guaranteed to be writable as
     `alignment * n + offset` with `n` an integer
 */
-template<class T_,int _aligment,int _offset=0>
+template<class T_,int _aligment,int _offset>
 struct Int {
     static constexpr int               alignment = _aligment;
     static constexpr int               offset    = _offset;

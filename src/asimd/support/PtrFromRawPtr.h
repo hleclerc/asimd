@@ -1,7 +1,7 @@
 #ifndef ASIMD_PtrFromRawPtr_H
 #define ASIMD_PtrFromRawPtr_H
 
-#include "../Int.h"
+#include "Int.h"
 
 namespace asimd {
 

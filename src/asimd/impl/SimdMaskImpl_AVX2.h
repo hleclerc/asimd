@@ -1,10 +1,8 @@
 #pragma once
 
-#ifdef __AVX2__
+#include "x86_intrin.h"
 
-// #include "../architectures/X86CpuFeatures.h"
-// #include "SimdMaskImpl_Generic.h"
-#include <x86intrin.h>
+#ifdef ASIMD_X86_HAS_AVX2
 
 namespace asimd {
 namespace internal {
@@ -14,4 +12,4 @@ namespace internal {
 } // namespace internal
 } // namespace asimd
 
-#endif // __AVX2__
+#endif // ASIMD_X86_HAS_AVX2

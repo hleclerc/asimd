@@ -5,6 +5,12 @@
 
 namespace asimd {
 
+/// FORWARD DECLARATION, and it is load-bearing. `N.h` and `Int.h` include each other: entering
+/// through `Int.h` -- which is what `Ptr.h` does -- left `Int` undeclared by the time the
+/// operators at the bottom of this file named it, and `Ptr.h` had not compiled since.
+/// The default argument lives HERE, so `Int.h` must not repeat it.
+template<class T_,int _aligment,int _offset=0> struct Int;
+
 /**
   like std::integral_constant
 */

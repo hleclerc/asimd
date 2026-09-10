@@ -5,7 +5,7 @@
 
 #include "SimdMask.h"
 #include "SimdSize.h"
-//#include "Ptr.h"
+#include "Ptr.h"   // the `load( P )` / `store( P )` overloads below are written against it
 
 namespace asimd {
 
@@ -81,13 +81,22 @@ struct SimdVec {
     template<class G,class V> static HaD SimdVec gather                ( const G *data, const V &ind ) { return internal::gather( data, ind.impl, S<Impl>() ); }
 
     // selection
-    HaD const T&                                 operator[]            ( int i ) const { return internal::at( impl, i ); }
-    HaD T&                                       operator[]            ( int i ) { return internal::at( impl, i ); }
+    /// Reading a lane yields a VALUE. A `vector_size` lane is not an object one can point at --
+    /// see the note on `at` in SimdVecImpl_Generic.h -- so writing one goes through a proxy that
+    /// keeps `v[ i ] = x` working without ever forming a `T &`.
+    struct LaneProxy {
+        HaD operator T   () const { return internal::at( *impl, i ); }
+        HaD LaneProxy &operator=( T value ) { internal::set_at( *impl, i, value ); return *this; }
+        Impl *impl; int i;
+    };
+
+    HaD T                                        operator[]            ( int i ) const { return internal::at( impl, i ); }
+    HaD LaneProxy                                operator[]            ( int i ) { return { &impl, i }; }
     HaD auto                                     sub_vec               ( N<size_> ) const { return *this; }
     HaD auto&                                    sub_vec               ( N<size_> ) { return *this; }
     template<int s> HaD auto                     sub_vec               ( N<s> ) const { return SimdVec<T,size_/2,Arch>( impl.data.split.v0 ).sub_vec( N<s>() ); }
     template<int s> HaD auto&                    sub_vec               ( N<s> ) { return reinterpret_cast<SimdVec<T,size_/2,Arch> &>( impl.data.split.v0 ).sub_vec( N<s>() ); }
-    HaD const T*                                 begin                 () const { return &operator[]( 0 ); }
+    HaD const T*                                 begin                 () const { return internal::lane_ptr( impl ); }
     HaD const T*                                 end                   () const { return begin() + size(); }
 
     // arithmetic operators
@@ -117,7 +126,7 @@ struct SimdVec {
 
 #define SIMD_VEC_IMPL_CMP_OP( NAME, OP ) \
     template<class T,int size,class Arch> auto as_a_simd_mask( const internal::Op_##NAME<T,size,Arch> &op ) { return simd_mask_from_simd_mask_impl( internal::NAME##_as_a_simd_mask( op.a, op.b ) ); } \
-    template<class T,int size,class Arch> auto as_a_simd_vec( const internal::Op_##NAME<T,size,Arch> &op ) { using P = PI_<8*sizeof(T)>::T; return SimdVec<P,size,Arch>( internal::NAME##_as_a_simd_vec( op.a, op.b, S<internal::SimdVecImpl<P,size,Arch>>() ) ); } \
+    template<class T,int size,class Arch> auto as_a_simd_vec( const internal::Op_##NAME<T,size,Arch> &op ) { using P = typename PI_<8*sizeof(T)>::T; return SimdVec<P,size,Arch>( internal::NAME##_as_a_simd_vec( op.a, op.b, S<internal::SimdVecImpl<P,size,Arch>>() ) ); } \
     template<class T,int size,class Arch> bool any( const internal::Op_##NAME<T,size,Arch> &op ) { return any( as_a_simd_mask( op ) ); } \
     template<class T,int size,class Arch> bool all( const internal::Op_##NAME<T,size,Arch> &op ) { return all( as_a_simd_mask( op ) ); } \
 
