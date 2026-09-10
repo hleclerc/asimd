@@ -16,6 +16,7 @@ Measured on `g++ 15.2`, Xeon W-2145 (Skylake-X: SSE2 … AVX-512VL/BW/DQ).
 | value assertions, at 5 ISA levels | 29 (one level) | **2 860** |
 | public headers that compile standalone | 4 / 7 | **7 / 7** |
 | cells that need gcc's vector extensions to be fast (the MSVC gap) | 12 / 168 | **2 / 168** |
+| compilers the suite is run under | 1 | **2 locally, 3 in CI** |
 
 The four remaining generic cells are legitimate: x86 has no integer fused multiply-add (three
 cells), and a two-lane permutation of 64-bit elements is two moves whatever you do.
@@ -328,8 +329,9 @@ thing it exists for. `SimdOpsPlus_Split.h` registers the missing rank for `cmp_*
 
 A split form is the same three lines for every type and every width, because it delegates to
 whatever the halves resolve to — a register form, a mask register form, or another split.
-`permute` is deliberately left out: moving a lane from one half to the other is precisely what two
-half-registers cannot do, and its generic form goes through memory on purpose.
+`permute` was left out at first, on the grounds that moving a lane from one half to the other is
+precisely what two half-registers cannot do. That was the wrong call: an operation that opts out
+of the split mechanism is a hole in the premise, not an exception to it. It is in now — see § 8.
 
 ### How to run it
 
@@ -344,3 +346,109 @@ configuration is checked for correctness, not only for codegen.
 
 **Still not verified on MSVC itself** — it is not installed here. What is verified is that the
 library no longer *depends* on a compiler extension MSVC lacks, which was the actual risk.
+
+
+---
+
+## 8. `permute` at a split width, and the CI
+
+### 8.1 The one operation that did not split
+
+`permute` was the exception, and an exception is not something a library whose whole premise is
+"the width is the author's choice" gets to have. It is four half-permutations and two blends:
+
+```
+r_k = select( i_k < n0, permute( v0, i_k ), permute( v1, i_k - n0 ) )
+```
+
+for each half `k`. Both halves are permuted and one is discarded — an index pointing into the
+other half is out of range for the half it is handed to, which is harmless because the sub-permute
+wraps it and the blend throws that lane away. Only when the two halves have the same width: at
+`N = 5` they are 4 and 1, and there is no type in which to say "permute a one-lane vector with a
+four-lane index". Those widths keep the generic form, which is correct.
+
+Two register forms were missing underneath it, and without them the split had nothing to delegate
+to:
+
+- **`pshufb` at 128 bits (SSSE3).** A 32-bit lane index becomes four byte indices: multiply by
+  four, broadcast the low byte across its lane, add 0,1,2,3. Four instructions where `vpermilps`
+  needs one — but `vpermilps` is AVX, and without this an SSE machine had no variable permutation
+  at all, hence nothing for the split to use.
+- **A full 8-lane permutation on AVX without AVX2.** `vpermps` is AVX2; AVX has only `vpermilps`,
+  which stays inside each 128-bit half. Permute in place, permute again with the halves swapped,
+  blend on whether each index points at the half it started in — `( idx ^ lane_half ) & 4`.
+
+Timed, `permute` on `float × 8`, against the same thing written with gcc's vector extensions:
+
+| | asimd | gcc vectors | |
+|---|---|---|---|
+| SSE2 | 8.19 ns | 9.08 ns | no variable shuffle exists at all; both go through memory |
+| SSE4.1 | **1.89** | 9.34 | the split form, **4.9×** |
+| AVX | **1.36** | 3.50 | the new 8-lane form, **2.6×** |
+| AVX2 | 0.93 | 0.93 | one `vpermps` either way |
+| AVX-512 | 0.90 | 0.90 | idem |
+
+### 8.2 A rank says "better if available". `available` has to mean it.
+
+Under `-mssse3` the split form was selected and came out at **75 instructions against the generic
+form's 51** — slower, and chosen anyway because its rank was higher. The cause: `blendv` is
+SSE4.1, so the two blends fell back to lane loops and dominated. Availability now asks about
+*every piece* of a composite form, not just the headline one.
+
+Same shape, one level up: two backends registering the same `(Op, Key, RANK)` are as ambiguous as
+two overloads — the rank orders levels, not variants inside a level. `pshufb` and `vpermilps` both
+wanted `REGISTER` for `float × 4`. The fix is to say what is actually true, `Has<SSSE3> && !
+Has<AVX>`: the older form is the fallback, not a rival. `Selection.h` documents both limits now.
+
+### 8.3 Three more holes, found by measuring rather than reading
+
+- **`init_sc`, the scalar broadcast, ignored the split.** `SimdVec<float,32>( x )` wrote 32 floats
+  to memory one at a time — 25 instructions where two `vbroadcastss` do it. Six now.
+- **`to_bits` at twice the native width**: 11.36 ns → 1.13.
+- **`horizontal_sum` at twice the native width**: 20.05 ns → 2.41.
+
+`tests/bench_ops.cpp` is what found them, and it carries two traps worth knowing about. Indices
+the compiler can fold turn `__builtin_shuffle` into a *constant* shuffle, so the comparison stops
+being between two implementations of the same operation. And whichever variant runs first pays the
+frequency ramp: on this box that alone looked like a 1.9× regression on a loop the disassembler
+said was identical instruction for instruction.
+
+### 8.4 clang, and what it caught
+
+The suite now runs under gcc **and** clang locally, and clang immediately found two things gcc
+accepts:
+
+- **`if constexpr` does not discard anything outside a template.** Every `require_at_least` in
+  `test_x86_dispatch.cpp` sat inside `if constexpr ( A::Has<...> )` in `main`, so all of them
+  fired regardless of the target. gcc let it pass; clang is right. They live in a function
+  template now, where the guard actually guards.
+- **`at()` returned `T &` into a `vector_size` lane.** clang rejects binding a reference to a
+  vector element outright; gcc allows it as an extension. Reading a lane returns a value now, and
+  `v[ i ] = x` goes through a small proxy — so `SimdVec::operator[]` worked on clang by accident
+  only as long as nobody wrote to it.
+
+Both are exactly the class of bug a second compiler exists to find, and neither would ever have
+shown up on this machine.
+
+### 8.5 CI
+
+`.github/workflows/ci.yml`, three jobs:
+
+| job | what runs |
+|---|---|
+| `linux` (gcc, clang) | `run_all_isa.sh` — every test at five ISA levels plus two MSVC-path ones; `compile_matrix.sh`, asserted at 0/408; `no_vecext.sh` |
+| `windows` (MSVC) | `run_msvc.ps1` — every test at `/arch:` SSE2, AVX, AVX2 (built and run) and AVX512 (built only) |
+| `probes` | `make`, for the ABI check, which reads the disassembly and needs objdump |
+
+`tests/run_msvc.ps1` is a script and not workflow-inline on purpose: it is the thing to run on a
+Windows box directly. Two flags in it are load-bearing — `/Zc:preprocessor`, because MSVC's default
+preprocessor mishandles `__VA_ARGS__` and `check.h` is built on variadic macros; and the absence
+of `/arch:` for the baseline, because SSE2 is architectural on x64 and MSVC rejects the flag.
+
+AVX-512 is compiled but not run: GitHub's hosted runners do not guarantee the instruction set, and
+a `/arch:AVX512` binary faults without it. Compiling still exercises every AVX-512 backend, which
+is most of what CI is for. `pwsh tests/run_msvc.ps1 -RunAvx512` on a machine that has it.
+
+**Still unverified: MSVC itself.** It is not installed here, so the Windows job is the first thing
+that will actually run it. Given that clang found two real bugs the moment it was pointed at this
+code, the honest expectation is that MSVC finds some too — which is the point of adding it.

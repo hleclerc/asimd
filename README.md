@@ -127,7 +127,11 @@ cd tests && make          # build and run the tests, for this machine
 make isa                  # ... and at five x86 feature levels, plus two MSVC-path ones
 make matrix               # the (operation, type, ISA) compile map, 408 translation units
 make msvc                 # what the dispatch table is worth WITHOUT the compiler's vector types
+make bench                # timings for the cross-lane operations
 ```
+
+On Windows, `pwsh tests/run_msvc.ps1` does what `make isa` does, at MSVC's four `/arch:` levels.
+`.github/workflows/ci.yml` runs all of it — gcc and clang on Linux, MSVC on Windows.
 
 `make isa` is the one that matters when changing a backend: `make` alone builds for
 `-march=native`, so on a recent box the SSE2 and AVX paths — the ones most likely to rot — are
@@ -192,6 +196,7 @@ are in [FINDINGS.md](FINDINGS.md). Where it stood, and where it stands:
 | values passed through memory across a call | 2 of 5 probes | **0 of 5** |
 | value assertions, at 5 ISA levels | 29 (one level) | **2 860** |
 | cells needing gcc's vector extensions to be fast (the MSVC gap) | 12 / 168 | **2 / 168** |
+| compilers the suite runs under | 1 | **gcc, clang, MSVC** |
 
 The short version: the backend was correct and fast for `float × 8`, the cell it was ported on,
 and thin everywhere else. The feature lattice went SSE2 → AVX with no SSE4.1 in between, so a
