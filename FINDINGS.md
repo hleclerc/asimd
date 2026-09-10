@@ -652,7 +652,62 @@ pointer is `sp` and not `%rsp`; Mach-O prefixes symbols with `_`; and a frame po
 `%rsp` in a *clean* prologue, so the probe is built with `-fomit-frame-pointer` and zero can mean
 zero.
 
-### 9.5 What the backend costs, where it costs anything
+### 9.5 gcc 13 rejected the selection mechanism, and the mechanism was not following its own advice
+
+`test_arm_dispatch.cpp` built everywhere it was tried — clang on x86 at five feature levels and on
+AArch64 at six, gcc 15 on AArch64, gcc 15 on the author's Ubuntu — and failed on GitHub's
+`ubuntu-latest`, whose default compiler is **gcc 13**:
+
+```
+Selection.h:94: error: 'constexpr int asimd::sel::search() [with Op = ops::cmp_gt;
+                        Key = Key<float,4,X86Cpu<64,SSE2,SSE>>; int R = 40]'
+                        used before its definition
+```
+
+on `cmp_gt`, `select` and `permute` at `Key<float,4,…>` — exactly the three cells `main` named
+directly inside an `if constexpr`. "Used before its definition", for a specialization whose
+definition sits eight lines above the use, is an **instantiation-ordering** complaint: the point of
+instantiation gcc picks for `search<Op,Key,MAX_RANK>`, which the variable template `rank` needs to
+be initialized, can land before the definition it requires.
+
+And the chain that gets it there is not incidental — it is the design. A split rank's `available`
+asks what rank the **halves** reached (`SimdOpsPlus_Split.h`), which re-enters `rank`, which
+re-enters the search, at a smaller width. On x86 at `-msse2` neither `select` nor `permute` has a
+register form at four lanes, so both walk that whole chain; on ARM every one of them is registered,
+so none does. That asymmetry is why it reproduced on one architecture and not the other.
+
+**It could not be reproduced here.** Not with gcc 13, gcc 15 or clang on AArch64; not with the
+architecture type replaced by one whose backend is absent; not with the discarded `if constexpr`
+branch, the function-template point of instantiation, or an architecture whose `permute` lacks a
+register form — six attempts, including one with gcc 13.4 installed specifically to try. So the fix
+was chosen to be one whose correctness does not depend on knowing the trigger:
+
+**`sel::search` is no longer a `constexpr` function template.** It is a class template, and the
+diagnostic gcc emitted is now inexpressible — there is no constexpr function left whose definition
+could be used too early. That is not a workaround dressed up: this file's own argument, a few lines
+above, is that *a variant is a class specialization and never a function overload, because
+specializations are looked up at the point of instantiation rather than of definition*. The search
+was the one piece of the mechanism not following it.
+
+Two things had to survive the change, and one of them was not being checked at all:
+
+- **The selected ranks must be identical.** They are — both dispatch grids print the same numbers,
+  3 of 63 generic on ARM and 33 of 63 at the ARMv7 floor, on three compilers.
+- **The search must stay LAZY.** A rank below the selected one must never be instantiated, or the
+  recursion into the halves is walked for nothing on every operation at every width. The class
+  template keeps it by computing the "available" flag in a *default template argument*, so `R-1`
+  is only ever looked at when `R` is unavailable — and `tests/test_selection.cpp` now proves it,
+  with a variant at `SPLIT` whose `available` is `Poison<T>::value` for a `Poison` that is declared
+  and never defined. The key it sits on has a `REGISTER` form, so the search must stop above it;
+  if it ever looks lower the file stops compiling and names `Poison`. Verified to have teeth by
+  moving it one rank up, where it does fail.
+
+The test was also brought in line with `test_x86_dispatch.cpp`, which never hit this: it has always
+materialised its ranks through `rank_at_native_width<Op,T>()` rather than naming `sel::rank` inside
+a non-template function. Belt and braces — the `Selection.h` change is what makes the error
+impossible, that one makes the two files structurally the same.
+
+### 9.6 What the backend costs, where it costs anything
 
 Two honest numbers, both regressions, both understood.
 
@@ -674,7 +729,7 @@ intrinsic makes, and it is worth writing down because the instruction count — 
 `no_vecext.sh` measures — says the opposite: 5 against 5 at four lanes, 6 against 8 at eight, 9
 against 14 at sixteen. Both measurements are right about different things.
 
-### 9.6 What is left
+### 9.7 What is left
 
 Three cells on ARM reach nothing better than a lane loop, and they are one cell three times:
 `permute` on `double`. The index vector is always `SimdVec<SI32,N>`, and at two lanes that is 64

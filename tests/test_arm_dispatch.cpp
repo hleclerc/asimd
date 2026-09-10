@@ -47,6 +47,35 @@ static void row( const char *name ) {
     printf( "\n" );
 }
 
+/// THE RANK OF ONE CELL, THROUGH A FUNCTION TEMPLATE -- and that is not a stylistic choice.
+///
+/// Naming `sel::rank<...>` DIRECTLY inside a non-template function is what this file did, and on
+/// gcc 13 targeting x86 it produced:
+///
+///   Selection.h:94: error: 'constexpr int asimd::sel::search() [...with int R = 40]'
+///                          used before its definition
+///
+/// on `cmp_gt`, `select` and `permute` at `Key<float,4,...>` -- exactly the three cells `main`
+/// named. An instantiation-ordering complaint, on clang and gcc 15 invisible.
+///
+/// Two things changed because of it. `sel::search` is no longer a `constexpr` function template
+/// at all -- see the long note in `Selection.h`, which is where the fix belongs, since the
+/// diagnostic named a piece of the mechanism rather than of this test. And the ranks here are
+/// materialised through these templates first, the way `test_x86_dispatch.cpp` has always done
+/// it with `rank_at_native_width<Op,T>()`: inside a template the point of instantiation is well
+/// defined, and the value arrives as a plain `int` that any later `if constexpr` can compare.
+///
+/// Belt and braces on purpose. The `Selection.h` change is the one that makes the error
+/// impossible; this one makes the file structurally identical to the sibling that never hit it.
+template<class Op,class T,int N,class Arch>
+static int rank_of() { return sel::rank<Op,Key<T,N,Arch>>; }
+
+template<class Op,int N,class Arch,int IS>
+static int rank_of_mask() { return sel::rank<Op,Key<void,N,Arch,IS>>; }
+
+template<class Op,class T,int N,class Arch,int IS>
+static int rank_of_sel() { return sel::rank<Op,Key<T,N,Arch,IS>>; }
+
 template<class Arch>
 static void grid( const char *what ) {
     printf( "  %s: %s\n", what, Arch::name().c_str() );
@@ -197,17 +226,28 @@ int main() {
     // side there is no "widest hardware gets the slowest path" trap to fall into here. It is
     // asserted anyway, because that is the cell every caller who does not think about width lands
     // on.
+    // EVERY RANK MATERIALISED FIRST, through the function templates above, and only then
+    // compared -- see the note on `rank_of`. Nothing below names `sel::rank`.
     constexpr int nat = SimdSize<float,A>::value;
+    const int n_gt   = rank_of     <ops::cmp_gt ,float,nat,A>();
+    const int n_sel  = rank_of_sel <ops::select ,float,nat,A,32>();
+    const int n_perm = rank_of     <ops::permute,float,nat,A>();
+    const int n_bits = rank_of_mask<ops::to_bits,      nat,A,32>();
+    const int n_fma  = rank_of     <ops::fma    ,float,nat,A>();
+    printf( "  at the native width (%d lanes), SimdVec<float> gets:"
+            " cmp_gt=%d select=%d permute=%d to_bits=%d fma=%d\n",
+            nat, n_gt, n_sel, n_perm, n_bits, n_fma );
+
     if constexpr ( A::template Has<features::NEON>::value ) {
-        CHECK( ( sel::rank<ops::cmp_gt,Key<float,nat,A>> ) > sel::GENERIC );
-        CHECK( ( sel::rank<ops::select,Key<float,nat,A,32>> ) > sel::GENERIC );
+        CHECK( n_gt  > sel::GENERIC );
+        CHECK( n_sel > sel::GENERIC );
     }
     if constexpr ( A::template Has<features::ASIMD>::value ) {
-        CHECK( ( sel::rank<ops::permute,Key<float,nat,A>> ) > sel::GENERIC );
-        CHECK( ( sel::rank<ops::to_bits,Key<void,nat,A,32>> ) > sel::GENERIC );
+        CHECK( n_perm > sel::GENERIC );
+        CHECK( n_bits > sel::GENERIC );
     }
-    if constexpr ( A::template Has<features::FMA>::value )
-        CHECK( ( sel::rank<ops::fma,Key<float,nat,A>> ) > sel::GENERIC );
+    if constexpr ( A::template Has<features::NEON>::value && A::template Has<features::FMA>::value )
+        CHECK( n_fma > sel::GENERIC );
 
     // ---- WHAT IS LEGITIMATELY GENERIC, and nothing else -------------------------------------
     //

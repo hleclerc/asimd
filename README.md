@@ -402,7 +402,7 @@ are in [FINDINGS.md](FINDINGS.md). Where it stood, and where it stands:
 | values passed through memory across a call, at a width that IS one register | 2 of 5 probes | **0 of 6 enforced probes**, on 5 x86 levels and on ARM |
 | value assertions, per feature level | 29 (one level) | **1 797**, at 5 x86 levels and 6 ARM ones |
 | cells needing the compiler's vector extensions to be fast (the MSVC gap) | 12 / 168 | **4 / 196** on x86, all integer division; **2 / 196** on ARM, both a constant-folding artefact |
-| compilers the suite runs under | 1 | **gcc, clang, MSVC** |
+| compilers the suite runs under | 1 | **gcc 13, gcc 15, clang, MSVC** |
 
 ### What the ARM port found in the x86 code
 
@@ -439,6 +439,17 @@ a second backend that the performance numbers do not make:
 
 Two gaps in the `SPLIT` rank turned up the same way, and closing them improves an SSE-only x86
 build as much as ARM: `bcast_lane` and `mask_from_bits` had no split form at all.
+
+And one in `Selection.h` itself, found by CI rather than by either backend. **`sel::search` was a
+`constexpr` function template, and gcc 13 rejected an instantiation of it** — "used before its
+definition", for a definition eight lines above the use, which is an instantiation-ordering
+complaint about a chain the split ranks make deep on purpose. It is a class template now, so the
+diagnostic is inexpressible; and that is this file's own argument applied to the one piece of the
+mechanism that was not following it (§ 2: *a variant is a class specialization, never a function
+overload, because specializations are looked up at the point of instantiation*). The property the
+new form has to preserve — that a rank below the selected one is **never instantiated** — was
+being relied on and checked by nothing, and is now pinned by a variant whose `available` is a
+hard error if it is ever looked at. See FINDINGS § 9.5.
 
 Next up:
 

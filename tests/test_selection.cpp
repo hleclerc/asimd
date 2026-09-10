@@ -38,6 +38,25 @@ template<class T> struct sel::Variant<Permute,Key<T,8,Avx512>,sel::MASK_REGISTER
     static const char *run() { return "vpermps + mask registers"; }
 };
 
+// ---- THE SEARCH MUST BE LAZY: a rank BELOW the selected one is never instantiated.
+//
+// `Poison` is declared and never defined, so `Poison<T>::value` is a hard error the moment it is
+// instantiated. This variant sits at SPLIT (10) for a key that has a REGISTER form at 20, so the
+// search must find 20 and stop. IF IT EVER LOOKS LOWER, THIS FILE STOPS COMPILING -- with a
+// message naming `Poison`, which is about as clear as a compile error gets.
+//
+// The property is not decoration. `SimdOpsPlus_Split.h` computes a split rank's `available` by
+// asking what rank the HALVES reached, which re-enters the search at a smaller width; evaluating
+// ranks below the selected one would walk that recursion for nothing, on every operation, at
+// every width. It is also what the class-template form of the search in `Selection.h` had to
+// preserve when it replaced the `constexpr` function -- and nothing was checking it.
+template<class T> struct Poison;
+
+template<class T> struct sel::Variant<Permute,Key<T,8,Avx2>,sel::SPLIT> {
+    static constexpr bool available = Poison<T>::value;
+    static const char *run() { return "the search was not lazy"; }
+};
+
 // ---- A FACADE, DEFINED HERE, before the SVE variant below. This is exactly the trap that cost
 // all vectorization with function overloads and a qualified call.
 template<class Arch>

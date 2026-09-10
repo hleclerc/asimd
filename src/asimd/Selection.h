@@ -82,16 +82,49 @@ enum : int {
 template<class Op, class Key, int RANK>
 struct Variant { static constexpr bool available = false; };
 
+/// THE SEARCH FOR THE BEST AVAILABLE RANK, AS A CLASS TEMPLATE.
+///
+/// It was a `constexpr` FUNCTION template, and gcc 13 rejected one instantiation of it outright:
+///
+///     Selection.h: error: 'constexpr int asimd::sel::search() [with ... int R = 40]'
+///                          used before its definition
+///
+/// on three cells of `tests/test_arm_dispatch.cpp`, on x86, and not on gcc 15 or on clang.
+/// "Used before its definition", for a specialization whose definition sits a few lines above the
+/// use, is an INSTANTIATION-ORDERING complaint: the point of instantiation gcc picks for
+/// `search<Op,Key,MAX_RANK>` -- which the variable template `rank` needs in order to be
+/// initialized -- can land before the definition it requires, once the chain gets deep enough.
+///
+/// And the chain does get deep, by design: a rank's `available` may ask what rank the HALVES
+/// reached (`SimdOpsPlus_Split.h`), which re-enters `rank`, which re-enters the search, at a
+/// smaller width. That recursion is the point of the split ranks; it is not going away.
+///
+/// A CLASS TEMPLATE HAS NO SUCH QUESTION. Its specializations are instantiated on demand, at the
+/// point of use, with an ordering the standard pins down -- which is precisely the argument this
+/// file already makes above for a variant being a class specialization rather than a function
+/// overload. The one piece of the mechanism that was not following its own advice now does, and
+/// the diagnostic gcc emitted is no longer expressible: there is no constexpr function left whose
+/// definition could be used too early.
+///
+/// STILL LAZY, and that is load-bearing. The `bool` comes from `Variant<Op,Key,R>::available` in a
+/// DEFAULT TEMPLATE ARGUMENT, so rank R-1 is looked at only when R is unavailable: a rank below
+/// the one selected is never instantiated. That is what stops `SPLIT`'s `available` -- and the
+/// recursion into the halves it carries -- from being evaluated at a width where `REGISTER`
+/// already matched.
+template<class Op, class Key, int R, bool = ( R >= 0 && Variant<Op,Key,R>::available )>
+struct Search { static constexpr int value = R; };
+
 template<class Op, class Key, int R>
-constexpr int search() {
-    if constexpr ( R < 0 )                            return -1;
-    else if constexpr ( Variant<Op,Key,R>::available ) return R;
-    else                                              return search<Op,Key,R-1>();
-}
+struct Search<Op,Key,R,false> { static constexpr int value = Search<Op,Key,R-1>::value; };
+
+/// the floor. Rank 0 is always available in practice -- the generic form -- so reaching this
+/// means an operation with no variant at all, and -1 is what says so rather than a hang.
+template<class Op, class Key>
+struct Search<Op,Key,-1,false> { static constexpr int value = -1; };
 
 /// The selected rank -- a constant, hence printable, comparable, assertable.
 template<class Op, class Key>
-inline constexpr int rank = search<Op,Key,MAX_RANK>();
+inline constexpr int rank = Search<Op,Key,MAX_RANK>::value;
 
 template<class Op, class Key, class... A>
 decltype( auto ) call( A &&...a ) { return Variant<Op,Key,rank<Op,Key>>::run( static_cast<A&&>( a )... ); }
