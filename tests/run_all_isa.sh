@@ -45,8 +45,15 @@ case "$TARGET" in
                "-march=native -DASIMD_NO_COMPILER_VECTORS|native, MSVC path" )
         ;;
     *)
+        # THE `-mavx` MSVC-PATH ROW IS NOT REDUNDANT, and its absence hid a compile error for as
+        # long as the MSVC job existed. AVX gives the 256-bit register IMPLS; AVX2 gives the
+        # 256-bit integer INSTRUCTIONS. Between the two sits a configuration where a register impl
+        # exists with no register form of `add`/`sub`, so the generic form runs over an array --
+        # and that is MSVC's `/arch:AVX` precisely. SSE2 does not reach it (128-bit int add/sub are
+        # registered) and neither does native (the 256-bit ones are).
         ISAS=( "-msse2|SSE2" "-msse4.2|SSE4.2" "-mavx|AVX" "-mavx2 -mfma|AVX2" "-march=native|native"
                "-msse2 -DASIMD_NO_COMPILER_VECTORS|SSE2, MSVC path"
+               "-mavx -DASIMD_NO_COMPILER_VECTORS|AVX, MSVC path (= /arch:AVX)"
                "-march=native -DASIMD_NO_COMPILER_VECTORS|native, MSVC path" )
         ;;
 esac

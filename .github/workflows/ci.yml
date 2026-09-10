@@ -128,7 +128,7 @@ jobs:
         working-directory: tests
         run: |
           command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
-          ./check_arm_lattice.sh clang
+          ./check_arm_lattice.sh clang --strict
 
       # NO ARMv7 CROSS BUILD HERE, DELIBERATELY. It would compile the real C++ headers for a
       # 32-bit ARM target, which is more coverage than the lattice check above -- but it cannot be

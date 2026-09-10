@@ -590,7 +590,21 @@ void init_stream( const P &data, const SimdVecImpl<T,1,Arch> &impl ) {
         if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) { \
             res.data.split.v0 = NAME( a.data.split.v0, b.data.split.v0 ); \
             res.data.split.v1 = NAME( a.data.split.v1, b.data.split.v1 ); \
-        } else if constexpr ( requires { a.data.values OP b.data.values; } ) { \
+        /* THE TEST ASKS WHETHER THE RESULT CAN BE ASSIGNED BACK, not merely whether the */ \
+        /* operator parses -- and the difference is ARRAY-TO-POINTER DECAY. On MSVC, and under */ \
+        /* ASIMD_NO_COMPILER_VECTORS, `values` is a plain `T[ N ]`; `a.data.values - b.data.values` */ \
+        /* then decays to POINTER SUBTRACTION, which is perfectly valid and yields a ptrdiff_t. */ \
+        /* So the old test said yes for `sub`, this branch was taken, and assigning an integer */ \
+        /* to an array is a hard error: */ \
+        /*     error C3863: array type 'Values' is not assignable            (MSVC)          */ \
+        /*     error: array type 'Values' (aka 'long[4]') is not assignable  (clang, same)   */ \
+        /* It only bites where a register impl exists WITHOUT a register form of the operation, */ \
+        /* which on x86 is 256-bit integer `add`/`sub` -- AVX gives the impl, AVX2 gives the */ \
+        /* instructions. That is MSVC's `/arch:AVX` exactly, and no `run_all_isa.sh` row matched */ \
+        /* it: the MSVC-path rows were SSE2 (where 128-bit int add/sub are registered) and */ \
+        /* native (where the 256-bit ones are). There is an `-mavx` row now. */ \
+        /* `+`, `*`, `/` and `&` are ill-formed on pointers, so `sub` was the only one affected. */ \
+        } else if constexpr ( requires { res.data.values = a.data.values OP b.data.values; } ) { \
             res.data.values = a.data.values OP b.data.values; \
         } else { \
             for ( int i = 0; i < size; ++i ) \
@@ -633,7 +647,10 @@ SimdVecImpl<T,size,Arch> anb( const SimdVecImpl<T,size,Arch> &a, const SimdVecIm
     if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
         res.data.split.v0 = anb( a.data.split.v0, b.data.split.v0 );
         res.data.split.v1 = anb( a.data.split.v1, b.data.split.v1 );
-    } else if constexpr ( requires { a.data.values & b.data.values; } ) {
+    } else if constexpr ( requires { res.data.values = a.data.values & b.data.values; } ) {
+        // assignability, not parseability -- see the note in SIMD_VEC_IMPL_ARITHMETIC_OP. `&` on
+        // two pointers is ill-formed so this one was never wrong, but the two tests should not
+        // differ in what they ask.
         res.data.values = a.data.values & b.data.values;
     } else {
         for ( int i = 0; i < size; ++i )

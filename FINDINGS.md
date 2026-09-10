@@ -501,10 +501,48 @@ boundary **from both sides**:
 The negative row is the one that earns its place. If those intrinsics *were* available on ARMv7,
 the `ASIMD` guard would be denying a 32-bit part instructions it has; and if a later edit moved
 one of them under `NEON`, the first row would start failing and name it. Both probe files are C
-with no standard library, and `arm_neon.h` is compiler-provided — so this runs with **no cross
-toolchain and no sysroot**, on any host with clang. That matters more than it sounds: the ARMv7
-lattice is the one claim nobody can check on the machine they develop on, and this makes it the
-one claim that is checked everywhere.
+and `arm_neon.h` is compiler-provided — so this runs with **no cross toolchain**, on any host with
+clang. That matters more than it sounds: the ARMv7 lattice is the one claim nobody can check on
+the machine they develop on, and this makes it the one claim that is checked everywhere.
+
+**It did not run in CI on the first try, and it lied about why.** `arm_neon.h` includes
+`<stdint.h>`; clang's own `stdint.h` does `#include_next` to the system one whenever
+`__STDC_HOSTED__` is set, and on the aarch64 Linux runner that lands in the *host's* glibc and
+dies on `bits/libc-header-start.h` — the armhf multiarch headers are not installed. The script
+reported:
+
+```
+  NEON-guarded intrinsics on ARMv7-A             no   EXPECTED yes
+      /usr/include/stdint.h:26:10: fatal error: 'bits/libc-header-start.h' file not found
+THE LATTICE IS WRONG: a feature guard does not match the instruction set
+```
+
+A missing header, reported as a feature-lattice defect. The third false verdict of this port,
+after `no_vecext.sh`'s clean sweep (§ 9.2) and the ABI probe's two-way misreading (§ 9.4), and the
+worst of the three: the other two said "fine" when they knew nothing, this one sent the reader to
+hunt a bug in `ArmCpuFeatures.h` that did not exist.
+
+Two fixes, and the second matters more than the first:
+
+- **`-ffreestanding`** clears `__STDC_HOSTED__`, so clang defines the integer types itself and no
+  system header enters the picture — checked with `-H`: `arm_neon.h`, `arm_bf16.h`,
+  `arm_vector_types.h` and `stdint.h`, all four from clang's own resource directory. On macOS
+  clang's `stdint.h` is self-contained regardless, which is precisely why this was invisible on
+  the machine the check was written on. The probe files' pointer parameters also moved to the
+  `<stdint.h>` typedefs, since `int64_t` is `long` on LP64 and `long long` on ILP32 and hand-spelling
+  it was wrong on one of the two.
+- **A third verdict, `SKIPPED`**, for a host that genuinely cannot compile for the target: it names
+  the file that was not found and does not blame the lattice. A missing intrinsic is told from a
+  missing header by whether a *file* could not be found — not by `fatal error:` alone, because the
+  ASIMD-on-ARMv7 row is *meant* to fail, fails with dozens of errors, and clang caps that with
+  `fatal error: too many errors emitted`, which the first cut of the discriminator misread in turn.
+  Hence also `-ferror-limit=0`.
+
+A skip is honest but silent, and silence is how a check stops being one. So CI passes `--strict`,
+under which a skipped row fails the job; `make lattice` stays permissive, because a contributor on
+an odd host should not be blocked by a check that cannot run there. All three verdicts were
+verified to have teeth: a real defect (an A64 intrinsic moved into the NEON file) exits 1, a
+missing header exits 0 permissive and 1 strict, and the clean state exits 0.
 
 `test_arm_ops.cpp` does the runtime half: it runs the entire value grid a second time over
 `ArmCpu<64,NEON,FMA>` — NEON without ASIMD, on whatever host it is compiled on — and everything

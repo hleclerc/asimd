@@ -53,6 +53,29 @@ struct MaskSplits<N,IS,Arch,true> { static constexpr bool value = true; };
 
 } // namespace internal
 
+namespace internal {
+
+/// The two halves of a split need not have the same width -- at N = 5 they are 4 and 1 -- so a
+/// value broadcast in one half has to be RE-FORMED at the other half's width rather than copied
+/// across. When the widths do match this is the identity and compiles to nothing.
+///
+/// A FREE function template rather than a member of the variant, deliberately: calling a member
+/// template with explicit template arguments (`spread<n1>( h )`) from inside its own class is
+/// exactly the shape MSVC's two-phase lookup has historically been weakest on, and MSVC is the
+/// one compiler this cannot be tried on before pushing. Nothing is lost by moving it out.
+template<class T,int M,class Arch,class H>
+static SimdVecImpl<T,M,Arch> spread_lane_0( const H &h ) {
+    if constexpr ( std::is_same<H,SimdVecImpl<T,M,Arch>>::value ) {
+        return h;
+    } else {
+        SimdVecImpl<T,M,Arch> r;
+        init_sc( r, T( at( h, 0 ) ) );
+        return r;
+    }
+}
+
+} // namespace internal
+
 /// "is the half worth delegating to" -- i.e. does it resolve to something better than another
 /// lane loop. Guarded by a specialisation so that `rank<..., Key<T,0,Arch>>` is never named.
 template<class Op,class T,int N,class Arch,bool = ( N > 0 )>
@@ -298,26 +321,13 @@ struct sel::Variant<ops::bcast_lane<LANE>,Key<T,N,Arch>,sel::SPLIT> {
         if constexpr ( LANE < n0 ) {
             const auto h = sel::call<ops::bcast_lane<lh>,Key<T,n0,Arch>>( v.data.split.v0 );
             res.data.split.v0 = h;
-            res.data.split.v1 = spread<n1>( h );
+            res.data.split.v1 = internal::spread_lane_0<T,n1,Arch>( h );
         } else {
             const auto h = sel::call<ops::bcast_lane<lh>,Key<T,n1,Arch>>( v.data.split.v1 );
-            res.data.split.v0 = spread<n0>( h );
+            res.data.split.v0 = internal::spread_lane_0<T,n0,Arch>( h );
             res.data.split.v1 = h;
         }
         return res;
-    }
-
-    /// the two halves need not have the same width -- at N = 5 they are 4 and 1 -- so the value
-    /// has to be re-formed at the other half's width rather than copied across.
-    template<int M,class H>
-    static internal::SimdVecImpl<T,M,Arch> spread( const H &h ) {
-        if constexpr ( std::is_same<H,internal::SimdVecImpl<T,M,Arch>>::value ) {
-            return h;
-        } else {
-            internal::SimdVecImpl<T,M,Arch> r;
-            internal::init_sc( r, T( internal::at( h, 0 ) ) );
-            return r;
-        }
     }
 };
 

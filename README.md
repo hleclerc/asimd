@@ -164,9 +164,26 @@ clang: does the ARM feature lattice hold?
 ```
 
 The last row is the one that earns its place: if those intrinsics *were* available on ARMv7, the
-`ASIMD` guard would be denying a 32-bit part instructions it has. Both probe files are C with no
-standard library, and `arm_neon.h` comes from the compiler — so this needs **no cross toolchain
-and no sysroot**, and runs on a laptop rather than only in CI.
+`ASIMD` guard would be denying a 32-bit part instructions it has. Both probe files are C, and
+`arm_neon.h` comes from the compiler, so this needs **no cross toolchain** — it runs on a laptop
+rather than only in CI.
+
+`-ffreestanding` is what makes that true off macOS, and it took a red CI run to find out.
+`arm_neon.h` includes `<stdint.h>`; clang's own `stdint.h` defers to the system one whenever
+`__STDC_HOSTED__` is set, and on an aarch64 Linux host that lands in the **host's** glibc and dies
+on `bits/libc-header-start.h`, because the armhf multiarch headers are not installed. Freestanding
+clears `__STDC_HOSTED__`, clang defines the integer types itself, and the only headers left in the
+picture are its own — verified with `-H`. On macOS clang's `stdint.h` is self-contained anyway,
+which is exactly why the problem was invisible where the check was written.
+
+And when a host still cannot compile for the target, the script now says **`SKIPPED`** and names
+the file it could not find. The first version reported `EXPECTED yes` and
+`THE LATTICE IS WRONG` — sending the reader to look for a bug in `ArmCpuFeatures.h` that was not
+there. A missing intrinsic and a missing header are told apart by whether a *file* was not found,
+not by `fatal error:` alone: the ASIMD-on-ARMv7 row is *meant* to fail, it fails with dozens of
+errors, and clang caps that with `fatal error: too many errors emitted` — which the first attempt
+at the discriminator duly misread. CI passes `--strict`, where a skipped row is a failure too,
+because a green tick nobody reads is how that row would quietly stop being checked.
 
 The extensions above Advanced SIMD — `FP16`, `BF16`, `DOTPROD`, `I8MM`, `RDM`, `FCMA`, `SVE`,
 `SVE2` — are declared as markers and dispatched on by nothing yet, with the reason written next to

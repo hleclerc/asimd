@@ -52,7 +52,7 @@ msvc:
 # ARMv7. Needs clang and nothing else -- no cross toolchain, no sysroot -- because `arm_neon.h`
 # comes from the compiler and both probe files are C.
 lattice:
-	@./check_arm_lattice.sh $(CC_FOR_LATTICE)
+	@./check_arm_lattice.sh $(CC_FOR_LATTICE) $(LATTICE_STRICT)
 
 # TIMINGS for the cross-lane operations, where counting instructions is a poor proxy: the generic
 # `permute` goes through the stack, and the reload is a store-to-load forwarding stall that no
@@ -66,6 +66,8 @@ clean:
 
 CXX_FOR_ISA     ?= g++
 CC_FOR_LATTICE  ?= clang
+# `make lattice LATTICE_STRICT=--strict` makes a skipped row a failure, as CI does.
+LATTICE_STRICT  ?=
 ARCH            ?= -march=native
 
 .PHONY: all build run isa matrix msvc lattice bench clean
