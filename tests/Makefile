@@ -14,7 +14,8 @@
 # and picks the parent's `xmake.lua`.
 
 XMAKE ?= xmake
-TESTS := test_ops test_split test_selection test_x86_ops test_x86_dispatch
+TESTS := test_ops test_split test_selection test_x86_ops test_x86_dispatch \
+         test_arm_ops test_arm_dispatch
 
 all: run
 
@@ -29,13 +30,14 @@ build:
 run: build
 	@for t in $(TESTS); do $(XMAKE) run -P . $$t || exit 1; done
 
-# every test at every x86 feature level, straight through the compiler. `make` alone only ever
-# builds for this machine, which on a recent box means the SSE2 and AVX paths are never exercised.
+# every test at every feature level of THIS ARCHITECTURE, straight through the compiler. `make`
+# alone only ever builds for this machine: on a recent x86 box that means the SSE2 and AVX paths
+# are never exercised, and on an ARM one that the ARMv8-A baseline never is.
 isa:
 	@./run_all_isa.sh $(CXX_FOR_ISA)
 
-# the (operation, type, ISA) compile map. A coverage hole that is a *compile* error cannot be
-# seen from a test binary.
+# the (operation, type, ISA) compile map, for whichever architecture the compiler targets. A
+# coverage hole that is a *compile* error cannot be seen from a test binary.
 matrix:
 	@./compile_matrix.sh $(CXX_FOR_ISA)
 
@@ -44,6 +46,13 @@ matrix:
 # A cell that changes is a cell gcc was carrying, i.e. a hole in the table.
 msvc:
 	@./no_vecext.sh "$(ARCH)" $(CXX_FOR_ISA)
+
+# IS THE ARM FEATURE LATTICE WHERE IT CLAIMS TO BE? Compiles the NEON-guarded intrinsics for
+# ARMv7-A and the ASIMD-guarded ones for both, and expects the second set to be REJECTED on
+# ARMv7. Needs clang and nothing else -- no cross toolchain, no sysroot -- because `arm_neon.h`
+# comes from the compiler and both probe files are C.
+lattice:
+	@./check_arm_lattice.sh $(CC_FOR_LATTICE)
 
 # TIMINGS for the cross-lane operations, where counting instructions is a poor proxy: the generic
 # `permute` goes through the stack, and the reload is a store-to-load forwarding stall that no
@@ -55,7 +64,8 @@ clean:
 	@$(XMAKE) clean -P . >/dev/null 2>&1 || true
 	@rm -rf build .xmake
 
-CXX_FOR_ISA ?= g++
-ARCH        ?= -march=native
+CXX_FOR_ISA     ?= g++
+CC_FOR_LATTICE  ?= clang
+ARCH            ?= -march=native
 
-.PHONY: all build run isa matrix msvc bench clean
+.PHONY: all build run isa matrix msvc lattice bench clean

@@ -36,97 +36,13 @@
 
 #include "architectures/X86CpuFeatures.h"
 
+// The variant SHAPES -- one macro per (operation, mask flavour) -- now live in
+// `SimdOpsPlus_Shapes.h`, because `SimdOpsPlus_Neon.h` needs the identical ones: what a variant
+// of `select` looks like is a property of `Selection.h`, not of the instruction set. What is left
+// in this file is the TABLE, which is the part that is actually about x86.
+#include "SimdOpsPlus_Shapes.h"
+
 namespace asimd {
-
-// ---------------------------------------------------------------------------------------------
-// the shapes. One macro per (operation, mask flavour); the tables below fill them in.
-// ---------------------------------------------------------------------------------------------
-#define ASIMD_X86_REQ1( C1 )     Arch::template Has<features::C1>::value
-#define ASIMD_X86_REQ2( C1, C2 ) ( Arch::template Has<features::C1>::value && Arch::template Has<features::C2>::value )
-
-/// "this feature, and NOT that one". Two backends at the same rank are ambiguous -- the rank
-/// orders the levels, not the variants inside one (see the KNOWN LIMITS note in Selection.h).
-/// Where an older instruction is a strictly worse fallback for a newer one, saying so in the
-/// constraint is more honest than inventing a rank between REGISTER and REGISTER.
-#define ASIMD_X86_REQ_EXCL( C1, CNOT ) ( Arch::template Has<features::C1>::value && ! Arch::template Has<features::CNOT>::value )
-
-/// `permute` with an explicit exclusion, for exactly that case.
-#define ASIMD_PLUS_PERMUTE_EXCL( C1, CNOT, T, N, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ_EXCL( C1, CNOT ) ) \
-    struct sel::Variant<ops::permute,Key<T,N,Arch>,sel::REGISTER> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        using I = internal::SimdVecImpl<SI32,N,Arch>; \
-        static V run( const V &v, const I &idx ) { V res; res.data.reg = FUNC; return res; } \
-    }
-
-/// fma. Two features: the one that gives the width, and FMA itself -- they are orthogonal on
-/// paper and were orthogonal in practice on the first AMD parts to carry FMA.
-#define ASIMD_PLUS_FMA( C1, C2, T, N, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ2( C1, C2 ) ) \
-    struct sel::Variant<ops::fma,Key<T,N,Arch>,sel::REGISTER> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        static V run( const V &a, const V &b, const V &c ) { \
-            V res; res.data.reg = FUNC( a.data.reg, b.data.reg, c.data.reg ); return res; } \
-    }
-
-/// variable-index permutation. `v` and the index vector may have different element types, so the
-/// index impl is named separately.
-#define ASIMD_PLUS_PERMUTE( C1, T, N, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::permute,Key<T,N,Arch>,sel::REGISTER> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        using I = internal::SimdVecImpl<SI32,N,Arch>; \
-        static V run( const V &v, const I &idx ) { V res; res.data.reg = FUNC; return res; } \
-    }
-
-/// broadcast of a compile-time lane. `LANE` is available inside FUNC.
-#define ASIMD_PLUS_BCAST( C1, T, N, FUNC ) \
-    template<int LANE,class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::bcast_lane<LANE>,Key<T,N,Arch>,sel::REGISTER> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        static V run( const V &v ) { V res; res.data.reg = FUNC; return res; } \
-    }
-
-/// comparison yielding a LANE mask (rank REGISTER) or a BIT mask (rank MASK_REGISTER).
-#define ASIMD_PLUS_CMP( C1, TAG, T, N, IS, RANK, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::TAG,Key<T,N,Arch>,sel::RANK> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        static internal::SimdMaskImpl<N,IS,Arch> run( const V &a, const V &b ) { \
-            internal::SimdMaskImpl<N,IS,Arch> res; res.data.reg = FUNC; return res; } \
-    }
-
-/// blend. `m`, `a`, `b` are available inside FUNC; the result is `m ? a : b`.
-#define ASIMD_PLUS_SELECT( C1, T, N, IS, RANK, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::select,Key<T,N,Arch,IS>,sel::RANK> { \
-        static constexpr bool available = true; \
-        using V = internal::SimdVecImpl<T,N,Arch>; \
-        using M = internal::SimdMaskImpl<N,IS,Arch>; \
-        static V run( const M &m, const V &a, const V &b ) { \
-            V res; res.data.reg = FUNC; return res; } \
-    }
-
-#define ASIMD_PLUS_TO_BITS( C1, N, IS, RANK, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::to_bits,Key<void,N,Arch,IS>,sel::RANK> { \
-        static constexpr bool available = true; \
-        using M = internal::SimdMaskImpl<N,IS,Arch>; \
-        static PI64 run( const M &m ) { return FUNC; } \
-    }
-
-#define ASIMD_PLUS_MASK_FROM_BITS( C1, N, IS, RANK, FUNC ) \
-    template<class Arch> requires ( ASIMD_X86_REQ1( C1 ) ) \
-    struct sel::Variant<ops::mask_from_bits,Key<void,N,Arch>,sel::RANK> { \
-        static constexpr bool available = true; \
-        static internal::SimdMaskImpl<N,IS,Arch> run( PI64 b ) { \
-            internal::SimdMaskImpl<N,IS,Arch> res; res.data.reg = FUNC; return res; } \
-    }
 
 // =============================================================================================
 // 1. 128 BITS -- SSE2, SSE4.1, FMA
@@ -452,10 +368,6 @@ ASIMD_PLUS_PERMUTE( AVX512VL, SI64, 4, _mm256_permutexvar_epi64( _mm256_cvtepi32
 #endif // ASIMD_X86_HAS_AVX512VL
 
 #endif // ASIMD_X86_HAS_AVX512F
-
-#undef ASIMD_X86_REQ1
-#undef ASIMD_X86_REQ2
-#undef ASIMD_X86_REQ_EXCL
 
 } // namespace asimd
 

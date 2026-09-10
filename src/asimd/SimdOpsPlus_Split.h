@@ -140,6 +140,82 @@ struct sel::Variant<ops::to_bits,Key<void,N,Arch,IS>,sel::SPLIT> {
 };
 
 // ---------------------------------------------------------------------------------------------
+// mask_from_bits -- the dual of `to_bits`, and it was missing.
+//
+// WHY IT MATTERS MORE ON ARM THAN ON x86. `Key<void,N,Arch>` carries no item size, so ONE
+// registration per width decides which FLAVOUR of mask that width produces, and every later
+// `select` has to live with it. On x86 the register forms cover 4, 8 and 16 lanes, so the
+// question rarely arises. On ARM the register is 128 bits and never wider: `mask_from_bits<8>`
+// has no width to be registered at, and the generic form writes eight lanes one at a time --
+// after which `select` at eight lanes gets a mask its own split form cannot use.
+//
+// Hence this: build each half with whatever the half resolved to, and keep the flavour they
+// agree on. Three lines, no per-type work, and the same three lines improve the x86 SSE-only
+// path -- `mask_from_bits<8>` there was generic too.
+//
+// `available` has to check FOUR things, and the last two are the ones that bite:
+//   - the half resolves to better than a lane loop, or there is nothing to gain;
+//   - both halves agree on the item size, or there is no type for the result;
+//   - the whole mask actually splits, at that item size;
+//   - and it splits THE SAME WAY the halves were computed -- `split_size_0 == n0`. A mask of 12
+//     items splits 8 + 4, so the two are not interchangeable.
+template<int N,class Arch,bool = ( N > 0 )>
+struct MfbItemSizeOf { static constexpr int value = 0; };
+template<int N,class Arch>
+struct MfbItemSizeOf<N,Arch,true> {
+    static constexpr int value = mask_item_size<decltype( sel::call<ops::mask_from_bits,Key<void,N,Arch>>( PI64( 0 ) ) )>::value;
+};
+
+template<int N,class Arch,bool = ( N > 0 )>
+struct MfbHalfWorthIt { static constexpr bool value = false; };
+template<int N,class Arch>
+struct MfbHalfWorthIt<N,Arch,true> {
+    static constexpr bool value = sel::rank<ops::mask_from_bits,Key<void,N,Arch>> > sel::GENERIC;
+};
+
+/// EVERYTHING ABOUT THE SPLIT, BEHIND ONE GUARD -- and the guard is `prev_pow_2( N ) < N`, not
+/// just `N > 1`.
+///
+/// The other split variants get this for free: they take their halves from
+/// `SimdVecImpl<T,N,Arch>::split_size_0`, which only exists when the impl really splits, so at
+/// N = 1 there is nothing to name and `available` is false. This one has no impl to ask -- the
+/// width whose flavour it is deciding is the one being computed -- so it uses `prev_pow_2`
+/// directly, and `prev_pow_2( 1 )` is 1. Written without the guard, the variant at N = 1 asked
+/// what `mask_from_bits<1>` resolves to in order to decide what `mask_from_bits<1>` resolves to:
+/// clang reported it as "`is0` must be initialized by a constant expression" sixty-odd
+/// instantiations deep, which is what an infinite template recursion looks like from the outside.
+template<int N,class Arch,bool = ( N >= 2 && prev_pow_2( N ) < N )>
+struct MfbSplitOf {
+    static constexpr int n0 = 0, n1 = 0, is = 0;
+    static constexpr bool ok = false;
+};
+
+template<int N,class Arch>
+struct MfbSplitOf<N,Arch,true> {
+    static constexpr int n0  = prev_pow_2( N );
+    static constexpr int n1  = N - n0;
+    static constexpr int is  = MfbItemSizeOf<n0,Arch>::value;
+    static constexpr int is1 = MfbItemSizeOf<n1,Arch>::value;
+    static constexpr bool ok =
+        MfbHalfWorthIt<n0,Arch>::value                  // the half is better than a lane loop
+        && is != 0 && is == is1                         // both halves agree on the flavour
+        && internal::MaskSplits<N,is,Arch>::value       // the whole mask splits, at that flavour
+        && MaskSplitSizes<N,is,Arch>::n0 == n0;         // ... and it splits THE SAME WAY
+};
+
+template<int N,class Arch>
+struct sel::Variant<ops::mask_from_bits,Key<void,N,Arch>,sel::SPLIT> {
+    using SP = MfbSplitOf<N,Arch>;
+    static constexpr bool available = SP::ok;
+    static internal::SimdMaskImpl<N,SP::is,Arch> run( PI64 b ) {
+        internal::SimdMaskImpl<N,SP::is,Arch> res;
+        res.data.split.v0 = sel::call<ops::mask_from_bits,Key<void,SP::n0,Arch>>( b );
+        res.data.split.v1 = sel::call<ops::mask_from_bits,Key<void,SP::n1,Arch>>( b >> SP::n0 );
+        return res;
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
 // select -- two half blends
 // ---------------------------------------------------------------------------------------------
 template<class T,int N,class Arch,int IS,bool = ( N > 0 )>
@@ -180,6 +256,68 @@ struct sel::Variant<ops::fma,Key<T,N,Arch>,sel::SPLIT> {
         res.data.split.v0 = sel::call<ops::fma,Key<T,n0,Arch>>( a.data.split.v0, b.data.split.v0, c.data.split.v0 );
         res.data.split.v1 = sel::call<ops::fma,Key<T,n1,Arch>>( a.data.split.v1, b.data.split.v1, c.data.split.v1 );
         return res;
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// bcast_lane -- and this one is EXACT, where `permute` above is a compromise.
+//
+// A permutation has to move lanes between halves, which is why it costs two half-permutations
+// and a blend. A broadcast does not: the lane it reads lives in exactly one half, and every
+// lane of the RESULT is that same value. So the whole thing is one half-broadcast, stored
+// twice -- no blend, no comparison, no index arithmetic.
+//
+// `LANE < n0` picks which half holds it, and the lane index has to be REBASED into that half
+// (`LANE - n0` for the upper one). Getting that wrong is silent: it would broadcast a
+// neighbouring lane, and every value would still look plausible.
+//
+// This was six of the nine generic cells left in the ARM grid -- `bcast_lane` had no split form
+// at all, so on a target whose register never exceeds 128 bits it was a lane loop at every width
+// above four. It buys the same thing on an x86 build without AVX2.
+// ---------------------------------------------------------------------------------------------
+template<int LANE,class T,int N,class Arch>
+struct sel::Variant<ops::bcast_lane<LANE>,Key<T,N,Arch>,sel::SPLIT> {
+    using V = internal::SimdVecImpl<T,N,Arch>;
+    static constexpr int n0 = internal::SplitOf<T,N,Arch>::n0;
+    static constexpr int n1 = internal::SplitOf<T,N,Arch>::n1;
+
+    /// which half holds `LANE`, and its index there.
+    static constexpr int nh = LANE < n0 ? n0 : n1;
+    static constexpr int lh = LANE < n0 ? LANE : LANE - n0;
+
+    /// the half must have a register form of its own, and `LANE` must be in range -- a
+    /// `bcast_lane<9>` on eight lanes is the caller's problem, but it must not be turned into a
+    /// hard error here by naming `bcast_lane<1>` on a zero-width half.
+    static constexpr bool available =
+        n0 > 0 && LANE >= 0 && LANE < N
+        && HalfIsWorthIt<ops::bcast_lane<lh>,T,nh,Arch>::value;
+
+    static V run( const V &v ) {
+        V res;
+        // ONE half-broadcast, whichever half `LANE` falls in; both halves of the result get it.
+        if constexpr ( LANE < n0 ) {
+            const auto h = sel::call<ops::bcast_lane<lh>,Key<T,n0,Arch>>( v.data.split.v0 );
+            res.data.split.v0 = h;
+            res.data.split.v1 = spread<n1>( h );
+        } else {
+            const auto h = sel::call<ops::bcast_lane<lh>,Key<T,n1,Arch>>( v.data.split.v1 );
+            res.data.split.v0 = spread<n0>( h );
+            res.data.split.v1 = h;
+        }
+        return res;
+    }
+
+    /// the two halves need not have the same width -- at N = 5 they are 4 and 1 -- so the value
+    /// has to be re-formed at the other half's width rather than copied across.
+    template<int M,class H>
+    static internal::SimdVecImpl<T,M,Arch> spread( const H &h ) {
+        if constexpr ( std::is_same<H,internal::SimdVecImpl<T,M,Arch>>::value ) {
+            return h;
+        } else {
+            internal::SimdVecImpl<T,M,Arch> r;
+            internal::init_sc( r, T( internal::at( h, 0 ) ) );
+            return r;
+        }
     }
 };
 

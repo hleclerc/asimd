@@ -76,20 +76,63 @@ using NativeCpu = X86Cpu< 8 * sizeof( void * )
 // -------------------------- ARM / AArch64 --------------------------
 // `__arm64__` alone was Apple's spelling: gcc and clang on Linux use `__aarch64__`, MSVC uses
 // `_M_ARM64`, so the branch was unreachable anywhere else.
-#elif defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 ) || defined( _M_ARM64EC )
+//
+// ONE BRANCH FOR BOTH ARMs, where there used to be two. The 32-bit and 64-bit lists had drifted
+// apart -- the AArch64 one hard-coded `features::NEON` and the ARMv7 one guarded it -- and
+// neither named anything but NEON. What actually distinguishes the two is a FEATURE, `ASIMD`,
+// so it belongs in the list rather than in the preprocessor: everything below is one
+// `#ifdef` per feature, exactly like the x86 list above, and the two targets differ only by
+// which of them fire.
+#elif defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 ) || defined( _M_ARM64EC ) \
+   || defined( __arm__ ) || defined( _M_ARM ) || defined( __ARM_ARCH )
+
+    // AArch64: Advanced SIMD is architectural, there is no flag to forget. MSVC's ARM64 targets
+    // it unconditionally too, and defines none of the `__ARM_FEATURE_*` macros.
+    #if defined( __aarch64__ ) || defined( __arm64__ ) || defined( _M_ARM64 ) || defined( _M_ARM64EC ) || defined( __ARM_ARCH_ISA_A64 )
+        #define ASIMD_HAS_A64 1
+    #endif
+
+    // ARMv7-A NEON. `__ARM_NEON` is the portable spelling and covers AArch64 as well; MSVC's
+    // 32-bit ARM target is ARMv7 with NEON and defines neither.
+    #if defined( __ARM_NEON ) || defined( __ARM_NEON__ ) || defined( ASIMD_HAS_A64 ) || defined( _M_ARM )
+        #define ASIMD_HAS_NEON 1
+    #endif
 
 using NativeCpu = ArmCpu< 8 * sizeof( void * )
-    // NEON is architectural on AArch64. The backends (`SimdVecImpl_Neon.h`, `SimdMaskImpl_Neon.h`)
-    // do not exist yet, so this declares the width and everything runs through the generic forms
-    // -- correct, and measurably slower. See the README.
-    , features::NEON
->;
-
-#elif defined( __arm__ ) || defined( _M_ARM )
-
-using NativeCpu = ArmCpu< 8 * sizeof( void * )
-    #ifdef __ARM_NEON
+    #ifdef ASIMD_HAS_A64
+        , features::ASIMD
+    #endif
+    #ifdef ASIMD_HAS_NEON
         , features::NEON
+    #endif
+    // FMLA is architectural on AArch64; on ARMv7 it rides on VFPv4.
+    #if defined( __ARM_FEATURE_FMA ) || defined( ASIMD_HAS_A64 )
+        , features::FMA
+    #endif
+    #ifdef __ARM_FEATURE_FP16_VECTOR_ARITHMETIC
+        , features::FP16
+    #endif
+    #if defined( __ARM_FEATURE_BF16_VECTOR_ARITHMETIC ) || defined( __ARM_FEATURE_BF16 )
+        , features::BF16
+    #endif
+    #ifdef __ARM_FEATURE_DOTPROD
+        , features::DOTPROD
+    #endif
+    #ifdef __ARM_FEATURE_MATMUL_INT8
+        , features::I8MM
+    #endif
+    // ARMv8.1-A's rounding saturating multiply-accumulate. The macro is spelled QRDMX, not RDM.
+    #ifdef __ARM_FEATURE_QRDMX
+        , features::RDM
+    #endif
+    #ifdef __ARM_FEATURE_COMPLEX
+        , features::FCMA
+    #endif
+    #ifdef __ARM_FEATURE_SVE
+        , features::SVE
+    #endif
+    #ifdef __ARM_FEATURE_SVE2
+        , features::SVE2
     #endif
 >;
 

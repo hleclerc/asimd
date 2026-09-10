@@ -2,6 +2,7 @@
 
 #include "impl/SimdMaskImpl_Generic.h"
 #include "impl/SimdMaskImpl_X86.h"
+#include "impl/SimdMaskImpl_Arm.h"
 
 #include "architectures/NativeCpu.h"
 #include "support/HaD.h"

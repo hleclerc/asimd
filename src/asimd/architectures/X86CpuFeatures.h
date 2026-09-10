@@ -1,6 +1,7 @@
 #pragma once
 
 #include "SimdFeatureOn.h"
+#include "GenericFeatures.h"
 
 namespace asimd {
 namespace features {
@@ -31,7 +32,9 @@ struct AVX512DQ {                                          static std::string na
 // ---- 256-bit ----
 struct AVX2     : SimdFeatureOn<256,16,ASIMD_CMON_TYPES> { static std::string name() { return "AVX2"    ; } };
 struct AVX      : SimdFeatureOn<256,16,ASIMD_CMON_TYPES> { static std::string name() { return "AVX"     ; } };
-struct FMA      {                                          static std::string name() { return "FMA"     ; } }; ///< orthogonal to AVX/AVX2 on paper, and on some AMD parts in practice
+// `FMA` lives in `GenericFeatures.h`: ARM needs the same feature, and a type declared in both
+// feature headers collides as soon as `NativeCpu.h` includes them together. It is still
+// orthogonal to AVX/AVX2 here -- on paper, and on the first AMD parts to carry it.
 
 // ---- 128-bit ----
 struct SSE4_2   : SimdFeatureOn<128,8,ASIMD_CMON_TYPES>  { static std::string name() { return "SSE4.2"  ; } };

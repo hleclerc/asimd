@@ -658,10 +658,29 @@ SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1
 // cmp operations ------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP( NAME, OP ) \
     /* _as_a_simd_mask */ \
+    /* THE THIRD CONDITION IS NOT REDUNDANT, and it was missing. */ \
+    /* */ \
+    /* This form returns the BIT flavour of mask, and recursing into the split hands each half */ \
+    /* to whatever `NAME##_as_a_simd_mask` resolves to at half the width -- which, wherever a */ \
+    /* backend registers a register form through SIMD_VEC_IMPL_CMP_OP_SIMDVEC, is the LANE */ \
+    /* flavour. `SimdMaskImpl<8,32>` does not assign to a `SimdMaskImpl<8,1>`, so the whole */ \
+    /* cell was a hard compile error rather than a slow path -- the same shape of hole as the */ \
+    /* `data.split` recursion of README section 3, one mechanism over. */ \
+    /* */ \
+    /* It needed 16 lanes AND a register form at 8 to show up, which is why it survived: the */ \
+    /* bit-flavoured mask only splits from 16 items up, and `to_bits( a > b )` and */ \
+    /* `select( a > b, ... )` go through `ops::cmp_gt` and never reach this function at all. */ \
+    /* `any( a > b )` and `all( a > b )` do. On x86 it reproduces at `SimdVec<float,16>` under */ \
+    /* -mavx, which no test happened to ask for; on ARM, where the register stops at 128 bits, */ \
+    /* it is `SimdVec<SI16,16>` -- an ordinary width. */ \
+    /* */ \
+    /* The `requires` asks the only question that matters -- do the halves give something this */ \
+    /* mask can hold -- and falls back to the lane loop when they do not. */ \
     template<class T,int size,class Arch> HaD \
     SimdMaskImpl<size,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
         SimdMaskImpl<size,1,Arch> res; \
-        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdMaskImpl<size,1,Arch>> ) { \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdMaskImpl<size,1,Arch>> \
+                    && requires { res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); } ) { \
             res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); \
             res.data.split.v1 = NAME##_as_a_simd_mask( a.data.split.v1, b.data.split.v1 ); \
         } else { \
@@ -747,6 +766,26 @@ SIMD_VEC_IMPL_CMP_OP( gt, > )
         ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
     }
 
+/// The same, with an EXCLUSION -- "this feature, and NOT that one".
+///
+/// NEEDED FOR THE SAME REASON `ASIMD_X86_REQ_EXCL` is, one mechanism over. `Selection.h`'s KNOWN
+/// LIMITS note says two backends registering the same (Op, Key, RANK) are as ambiguous as two
+/// overloads would be -- and these ARE two overloads, with nothing to order them. `FP32 x 4` and
+/// `FP64 x 2` were registered twice on any AVX target: once here by SSE2 (`cmpps`, two operands)
+/// and once by AVX (`vcmpps`, three operands and a predicate). Both constraints are satisfied,
+/// neither subsumes the other, so the call was AMBIGUOUS -- a hard error, on the most ordinary
+/// widths there are.
+///
+/// It survived because nothing reached it: `to_bits( a > b )` and `select( a > b, ... )` both go
+/// through `ops::cmp_gt` and its rank-ordered variants, and only `any( a > b )` / `all( a > b )`
+/// use this function at all.
+#define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( COND, CNOT, T, NB_ITEMS, ITEM_SIZE, NAME, FUNC ) \
+    template<class Arch> requires( Arch::template Has<features::COND>::value \
+                                && ! Arch::template Has<features::CNOT>::value ) HaD \
+    auto NAME##_as_a_simd_mask( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
+        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
+    }
+
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_VEC( COND, T, I, SIZE, NAME, FUNC ) \
     template<class Arch> requires( Arch::template Has<features::COND>::value ) HaD \
     auto NAME##_as_a_simd_vec( const SimdVecImpl<T,SIZE,Arch> &a, const SimdVecImpl<T,SIZE,Arch> &b, S<SimdVecImpl<I,SIZE,Arch>> ) { \
@@ -780,8 +819,17 @@ template<class T,int size,class Arch> HaD
 SimdVecImpl<T,size,Arch> iota( T beg, T mul, S<SimdVecImpl<T,size,Arch>> ) {
     SimdVecImpl<T,size,Arch> res;
     if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> ) {
-        res.data.split.v0 = iota( beg                                               , mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
-        res.data.split.v1 = iota( beg + SimdVecImpl<T,size,Arch>::split_size_0 * mul, mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
+        // `T( ... )` ON THE SECOND ROW, AND IT IS NOT DECORATION. `beg + n * mul` is subject to
+        // the INTEGER PROMOTIONS: on a 16- or 8-bit lane type it has type `int`, so the recursive
+        // call became `iota( int, short, S<...> )` and `T` could be deduced as both `int` and
+        // `short` at once -- no matching function, a hard error rather than a slow path.
+        //
+        // It only ever showed on the narrow types, and only at a width that SPLITS, which is why
+        // it survived: `tests/compile_matrix.sh` stopped at 32-bit lanes, and on ARM the native
+        // width of `SI16` is eight -- a register impl, so this branch is not taken. It is
+        // `SimdVec<SI16,16>` and `SimdVec<SI8,32>` that reach it, on either architecture.
+        res.data.split.v0 = iota( beg                                                  , mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_0,Arch>>() );
+        res.data.split.v1 = iota( T( beg + SimdVecImpl<T,size,Arch>::split_size_0 * mul ), mul, S<SimdVecImpl<T,SimdVecImpl<T,size,Arch>::split_size_1,Arch>>() );
     } else {
         // as for `iota( beg )`: written through `values`, which is a vector type here, so the
         // whole thing folds to a constant load plus one multiply-add at compile time.

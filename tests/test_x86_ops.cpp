@@ -53,6 +53,15 @@ static void grid( const char *label ) {
     CHECK_AT( label, to_bits( a > b ) == e_gt );
     CHECK_AT( label, to_bits( a < b ) == e_lt );
 
+    // ---- ... and `any`/`all` ON A LAZY COMPARISON go through a THIRD one: `as_a_simd_mask`,
+    // where `to_bits( a > b )` and `select( a > b, ... )` both route through `ops::cmp_gt` and
+    // never touch it. Which is how its split branch stayed broken -- it assumed both halves
+    // returned the BIT flavour of mask, so at 16 lanes with a register form at 8 (i.e. `-mavx`
+    // and up) the cell was a hard COMPILE error, not a slow path. Found on the ARM port, where
+    // the register stops at 128 bits and the same shape occurs at an ordinary width.
+    CHECK_AT( label, any( a > b ) == ( e_gt != 0 ) );
+    CHECK_AT( label, all( a > b ) == ( e_gt == ( N >= 64 ? ~PI64( 0 ) : ( PI64( 1 ) << N ) - 1 ) ) );
+
     // ---- select, driven by both a computed mask and a comparison
     {
         double e[ 64 ];
@@ -114,6 +123,20 @@ static void grid( const char *label ) {
         T sum = T( 0 );
         for ( int i = 0; i < N; ++i ) sum = T( sum + sa[ i ] );
         CHECK_AT( label, a.sum() == sum );
+    }
+
+    // ---- iota, plain and STRIDED. The strided form is the one that had no cell anywhere: it
+    // used to be a compile error at a register-backed width (it recursed into a `split` a
+    // register impl does not have -- FINDINGS.md finding 1), and after that was fixed it was
+    // still a compile error on the 8- and 16-bit lane types at any width that splits, because
+    // `beg + n * mul` integer-promotes and the recursion could no longer deduce `T`. Both are
+    // fixed; this is what says so.
+    {
+        double e[ 64 ];
+        for ( int i = 0; i < N; ++i ) e[ i ] = double( T( T( 3 ) + T( i ) ) );
+        CHECK_AT( label, lanes_are( V::iota( T( 3 ) ), e, N ) );
+        for ( int i = 0; i < N; ++i ) e[ i ] = double( T( T( 3 ) + T( i ) * T( 2 ) ) );
+        CHECK_AT( label, lanes_are( V::iota( T( 3 ), T( 2 ) ), e, N ) );
     }
 }
 
@@ -315,10 +338,11 @@ int main() {
         CHECK_LANES( e, 16, SimdVec<SI32,16>::iota( 3 ) );
         CHECK_LANES( e, 8,  SimdVec<FP32, 8>::iota( 3 ) );
         CHECK_LANES( e, 5,  SimdVec<FP32, 5>::iota( 3 ) );
-        // `iota( beg, mul )` is NOT tested here: it does not compile at a register-backed width.
-        // Its generic form goes through `data.split`, which SIMD_VEC_IMPL_REG does not have --
-        // the same structural hole `compile_matrix.sh` maps out. See FINDINGS.md, finding 1.
-        //   CHECK_LANES( e2, 8, SimdVec<SI32,8>::iota( 3, 2 ) );
+        // `iota( beg, mul )` IS tested now -- in the grid above, at every (type, width). It used
+        // to be impossible to call at a register-backed width at all, and the grid is where the
+        // remaining half of the problem showed up: the narrow lane types.
+        {   const double e2[ 8 ] = { 3, 5, 7, 9, 11, 13, 15, 17 };
+            CHECK_LANES( e2, 8, SimdVec<SI32,8>::iota( 3, 2 ) ); }
     }
     {
         alignas( 64 ) float data[ 16 ]; for ( int i = 0; i < 16; ++i ) data[ i ] = float( 10 * i );

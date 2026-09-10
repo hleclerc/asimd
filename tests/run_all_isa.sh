@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# EVERY TEST, AT EVERY x86 FEATURE LEVEL.
+# EVERY TEST, AT EVERY FEATURE LEVEL OF WHATEVER ARCHITECTURE THE COMPILER TARGETS.
 #
-# `make` builds for -march=native, so on this machine it only ever exercises the AVX-512 paths.
-# The interesting failures are elsewhere: intrinsics guarded by the wrong feature macro compile
-# fine on a machine that has everything and not at all on the target that needs them, and a
+# `make` builds for -march=native, so it only ever exercises what this machine happens to have.
+# The interesting failures are elsewhere: an intrinsic guarded by the wrong feature macro compiles
+# fine on a machine that has everything and not at all on the target that needs it, and a
 # `require_at_least` that holds under AVX-512 says nothing about SSE2.
 #
 #   ./run_all_isa.sh            g++
 #   ./run_all_isa.sh clang++
 #
+# THE LEVEL LIST FOLLOWS THE TARGET, not the host, and it is read off the compiler rather than off
+# `uname`: the compiler may be a cross compiler, and `-msse2` handed to an aarch64 one is not a
+# lower feature level but a hard error. This mattered the moment there were two backends.
 set -u
 CXX=${1:-g++}
 HERE=$( cd "$( dirname "$0" )" && pwd )
@@ -16,15 +19,38 @@ TMP=$( mktemp -d ); trap 'rm -rf "$TMP"' EXIT
 
 command -v "$CXX" >/dev/null || { echo "$CXX not found"; exit 1; }
 
-TESTS=( test_ops test_split test_selection test_x86_ops test_x86_dispatch )
-# The last two rows are the same ISA with ASIMD_NO_COMPILER_VECTORS: that macro forces the array
-# form of `values`, which is exactly what MSVC gets, since it has no `vector_size`. It is the only
-# way to exercise the MSVC configuration without MSVC -- and what it checks is not portability but
-# whether the dispatch table stands on its own, or has been leaning on gcc's vector arithmetic to
-# cover its holes. `tests/no_vecext.sh` measures the same thing in instructions.
-ISAS=( "-msse2|SSE2" "-msse4.2|SSE4.2" "-mavx|AVX" "-mavx2 -mfma|AVX2" "-march=native|native"
-       "-msse2 -DASIMD_NO_COMPILER_VECTORS|SSE2, MSVC path"
-       "-march=native -DASIMD_NO_COMPILER_VECTORS|native, MSVC path" )
+TESTS=( test_ops test_split test_selection test_x86_ops test_x86_dispatch
+        test_arm_ops test_arm_dispatch )
+
+# The `MSVC path` rows are the same ISA with ASIMD_NO_COMPILER_VECTORS: that macro forces the
+# array form of `values`, which is exactly what MSVC gets, since it has no `vector_size`. It is
+# the only way to exercise the MSVC configuration without MSVC -- and what it checks is not
+# portability but whether the dispatch table stands on its own, or has been leaning on the
+# compiler's vector arithmetic to cover its holes. It matters more on ARM, not less: MSVC's ARM64
+# target is a real one. `tests/no_vecext.sh` measures the same thing in instructions.
+TARGET=$( "$CXX" -dumpmachine 2>/dev/null || echo unknown )
+case "$TARGET" in
+    aarch64*|arm64*|arm-*|armv*)
+        # ARM. Advanced SIMD has been 128 bits since 2005, so these levels do not widen the
+        # register -- they add instructions at the same width. `armv8-a` is the A64 baseline;
+        # +fp16 and +dotprod are the extensions `ArmCpuFeatures.h` declares markers for.
+        #
+        # THERE IS NO ARMv7 ROW, and it is not an oversight: an ARMv7 build needs a cross
+        # compiler, which is exactly what a CI job is for and not what a developer has. The
+        # 32-bit lattice is exercised instead through `ArmCpu<64,NEON,FMA>`, a type -- see the
+        # `V7` arch in `test_arm_ops.cpp`, which runs the whole grid over it on every host.
+        ISAS=( "-march=armv8-a|ARMv8-A" "-march=armv8.2-a+fp16|ARMv8.2 +fp16"
+               "-march=armv8.4-a+dotprod|ARMv8.4 +dotprod" "-march=native|native"
+               "-march=armv8-a -DASIMD_NO_COMPILER_VECTORS|ARMv8-A, MSVC path"
+               "-march=native -DASIMD_NO_COMPILER_VECTORS|native, MSVC path" )
+        ;;
+    *)
+        ISAS=( "-msse2|SSE2" "-msse4.2|SSE4.2" "-mavx|AVX" "-mavx2 -mfma|AVX2" "-march=native|native"
+               "-msse2 -DASIMD_NO_COMPILER_VECTORS|SSE2, MSVC path"
+               "-march=native -DASIMD_NO_COMPILER_VECTORS|native, MSVC path" )
+        ;;
+esac
+echo "$CXX targets $TARGET"
 
 rc=0
 for isa in "${ISAS[@]}"; do

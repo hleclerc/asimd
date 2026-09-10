@@ -5,6 +5,11 @@ repaired. Everything below is reproduced by `make`, `make isa` or `make matrix` 
 
 Measured on `g++ 15.2`, Xeon W-2145 (Skylake-X: SSE2 … AVX-512VL/BW/DQ).
 
+> **§ 9 is the ARM port**, and four of its findings are in *this* code rather than in ARM's. A
+> second backend turns out to be an audit instrument of its own: it reaches widths and lane types
+> the x86 tests never asked for, and every generic form it exercises is shared. Those four are
+> listed there, not here, because that is where they were found.
+
 ## Where it stood, and where it stands
 
 | | before | after |
@@ -236,21 +241,25 @@ thing to run where one exists.
 | `check.h` | `KNOWN_BROKEN( why, cond )` — a diagnosed, unfixed bug prints without failing the build and turns into a loud `XPASS` once fixed. Every one it held is now a plain `CHECK`. |
 
 `make` → 665 assertions, 0 failures. `make isa` → the same at five ISA levels, 2 860 assertions.
-`make matrix` → 408 / 408.
+`make matrix` → 408 / 408. (After § 9: 1 797 assertions per level, and `make matrix` → 544 / 544.)
 
 ---
 
 ## 6. What is left
 
-- **clang and MSVC are unverified**, per § 4.
-- **NEON.** `architectures/ArmCpu.h` declares the feature and the width, so `SimdVec<float>` on
-  AArch64 is four generic lanes that give the right answer; `impl/SimdVecImpl_Neon.h` and
-  `SimdMaskImpl_Neon.h` remain to be written. Two primitives to watch: `permute` (`tbl` works on
-  bytes, so it costs more for 32-bit lanes) and `to_bits` (no `movemask` — a three or four
-  instruction reduction).
-- **8- and 16-bit types below AVX-512BW.** They work, entirely through the generic forms.
-  `X86CpuFeatures.h` advertises them at every level, so the widths are right and only the
-  backends are missing.
+- **clang and MSVC are unverified**, per § 4. ~~clang~~ — **done**, see § 9: verified at five x86
+  feature levels and six ARM ones. MSVC, including its ARM64 target, is still reasoned rather
+  than measured.
+- ~~**NEON**~~ — **done**, see § 9. Both primitives this entry flagged behaved as predicted:
+  `permute` does go through `TBL` and does cost more than one instruction for 32-bit lanes (four,
+  plus a constant — against `pshufb`'s five), and `to_bits` is indeed a reduction with no
+  `movemask` to reach for. The prediction was "three or four instructions"; it is two, an `AND`
+  with `{1,2,4,8}` and an `ADDV`.
+- **8- and 16-bit types below AVX-512BW.** They still work entirely through the generic forms on
+  x86; `X86CpuFeatures.h` advertises them at every level, so the widths are right and only the
+  backends are missing. **On ARM they now have register forms at every operation**, because
+  Advanced SIMD covers the lane widths uniformly where SSE does not — which is also what made the
+  `iota` promotion bug of § 9.2 visible.
 - **`SimdRangePtr`** compiles again but is still scaffolding: its loop body is commented out.
 - ~~**The `SPLIT` rank (10) is declared and never used**~~ — **done**, see § 7.
   (kept below for the measurement that motivated it)
@@ -432,13 +441,18 @@ shown up on this machine.
 
 ### 8.5 CI
 
-`.github/workflows/ci.yml`, three jobs:
+`.github/workflows/ci.yml`, four jobs since § 9:
 
 | job | what runs |
 |---|---|
-| `linux` (gcc, clang) | `run_all_isa.sh` — every test at five ISA levels plus two MSVC-path ones; `compile_matrix.sh`, asserted at 0/408; `no_vecext.sh` |
+| `linux` (gcc, clang) | `run_all_isa.sh` — every test at five x86 ISA levels plus two MSVC-path ones; `compile_matrix.sh`, asserted at 0/544; `no_vecext.sh` |
+| `arm` (gcc, clang) | the same three scripts on a **native arm64 runner**, so the tests run rather than only build; plus `check_arm_lattice.sh`, `make` for the ABI probe, and an ARMv7 cross build |
 | `windows` (MSVC) | `run_msvc.ps1` — every test at `/arch:` SSE2, AVX, AVX2 (built and run) and AVX512 (built only) |
 | `probes` | `make`, for the ABI check, which reads the disassembly and needs objdump |
+
+The ARM job runs the tests rather than only building them, and that is the point: this backend's
+failure modes change *values*, not compilability — a byte index off by one in a `TBL` control, a
+`to_bits` reduction that overflows a `uint8_t` and drops the top eight lanes.
 
 `tests/run_msvc.ps1` is a script and not workflow-inline on purpose: it is the thing to run on a
 Windows box directly. Two flags in it are load-bearing — `/Zc:preprocessor`, because MSVC's default
@@ -452,3 +466,187 @@ is most of what CI is for. `pwsh tests/run_msvc.ps1 -RunAvx512` on a machine tha
 **Still unverified: MSVC itself.** It is not installed here, so the Windows job is the first thing
 that will actually run it. Given that clang found two real bugs the moment it was pointed at this
 code, the honest expectation is that MSVC finds some too — which is the point of adding it.
+
+
+---
+
+## 9. The ARM backend, and what building it found in the x86 one
+
+The README's § 4 describes the backend; this is the audit half — what the port broke, what it
+found, and what it measured.
+
+`architectures/ArmCpuFeatures.h`, `impl/arm_intrin.h`, `impl/SimdVecImpl_Neon.h`,
+`impl/SimdMaskImpl_Neon.h`, `SimdOpsPlus_Neon.h`, plus `SimdOpsPlus_Shapes.h` factored out of
+`SimdOpsPlus_X86.h` so both backends share the variant *shapes*. Measured on `clang 17`, Apple M4
+Pro; the x86 half of every claim below was re-run at `-msse2`, `-msse4.2`, `-mavx` and
+`-mavx2 -mfma`, and compiled at AVX-512.
+
+### 9.1 The lattice splits at A64, not at "NEON"
+
+`__ARM_NEON` is defined on ARMv7-A **and** on AArch64, and `float64x2_t`, `vdivq_f32`, `vaddvq_*`,
+`vqtbl1q_u8`, `vdupq_laneq_*` and the 64-bit compares are all A64 only — about a third of what a
+128-bit backend wants to call. One feature would have repeated § 2.3 exactly: guarded by
+`__SSE2__`, half the SSE2 backend was really SSE4.1, and a genuine SSE2 target did not build.
+
+So `NEON` and `ASIMD` are two width-carrying features, and `tests/check_arm_lattice.sh` checks the
+boundary **from both sides**:
+
+```
+  NEON-guarded intrinsics on ARMv7-A             yes  ok
+  NEON-guarded intrinsics on AArch64             yes  ok
+  ASIMD-guarded intrinsics on AArch64            yes  ok
+  ASIMD-guarded intrinsics on ARMv7-A            no   ok
+```
+
+The negative row is the one that earns its place. If those intrinsics *were* available on ARMv7,
+the `ASIMD` guard would be denying a 32-bit part instructions it has; and if a later edit moved
+one of them under `NEON`, the first row would start failing and name it. Both probe files are C
+with no standard library, and `arm_neon.h` is compiler-provided — so this runs with **no cross
+toolchain and no sysroot**, on any host with clang. That matters more than it sounds: the ARMv7
+lattice is the one claim nobody can check on the machine they develop on, and this makes it the
+one claim that is checked everywhere.
+
+`test_arm_ops.cpp` does the runtime half: it runs the entire value grid a second time over
+`ArmCpu<64,NEON,FMA>` — NEON without ASIMD, on whatever host it is compiled on — and everything
+A64-only has to disappear and leave *the same answers* behind. `test_arm_dispatch.cpp` prints both
+rank grids side by side, and the ARMv7 column is visibly poorer (33 of 63 cells generic against 3),
+which is what says the two levels are really separate rather than one level written twice.
+
+### 9.2 Four bugs in the x86 code, found by four different mechanisms
+
+None of these is ARM's. Each was found by a different part of the port, which is the argument for a
+second backend that the timings do not make.
+
+**`any( a > b )` did not compile at 16 lanes** on any target with a register form at 8 — `-mavx`
+and up. The split branch of `NAME##_as_a_simd_mask` assumed both halves returned the *bit* flavour
+of mask; a register form returns the *lane* flavour, and `SimdMaskImpl<8,32>` does not assign to a
+`SimdMaskImpl<8,1>`. A hard error, not a slow path — the same shape of hole as § 2.1, one
+mechanism over.
+
+It needed 16 lanes *and* a register form at 8, and it survived because nothing reached it:
+`to_bits( a > b )` and `select( a > b, … )` both route through `ops::cmp_gt` and its ranked
+variants, and only `any`/`all` on a lazy comparison use that function at all. Found by writing the
+ARM grid, where the same shape occurs at `SimdVec<SI16,16>` — an ordinary width, because the ARM
+register stops at 128 bits. Fixed with a `requires` in the `if constexpr`, which asks the only
+question that matters — do the halves give something this mask can hold — and falls back to the
+lane loop when they do not. Both grids now call `any( a > b )` and `all( a > b )` at every cell.
+
+**`FP32 × 4` and `FP64 × 2` were registered twice.** `SimdVecImpl_SSE2.h` registers them with
+`cmpps` and `SimdVecImpl_AVX.h` with `vcmpps` — three operands and a predicate. These are ordinary
+function overloads, not ranked variants: on an AVX target both constraints held, neither subsumed
+the other, and the call was **ambiguous**. Precisely the situation `Selection.h`'s KNOWN LIMITS
+note describes ("two backends registering the same (Op, Key, RANK) are as ambiguous as two
+overloads would be"), and fixed with the remedy it prescribes — a
+`SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL` that says the older form is the *fallback*, not a rival.
+
+**`iota( beg, mul )` did not compile on the 8- and 16-bit lane types** at any width that splits.
+`beg + n * mul` is subject to the integer promotions, so on a 16-bit lane the recursive call became
+`iota( int, short, S<…> )` and `T` could be deduced as both at once. Found by adding `SI16` and
+`SI8` to `compile_matrix.sh` — 408 cells became 544, and 136 of the new ones failed. This is the
+second time this one operation has been a compile error for a structural reason (§ 2.1 was the
+first, for a different cause); it now has a cell in both value grids rather than a commented-out
+line saying it cannot be called.
+
+**`no_vecext.sh` had been measuring nothing.** Its `count()` ran `objdump -d --disassemble=probe`,
+which is a GNU binutils spelling; LLVM's objdump rejects it, and Mach-O prefixes symbols with an
+underscore besides. `grep -c` on empty output is 0, so every cell read `0->0`, the
+"is it more than 25 % worse" test never fired, and the script reported **"0 of 168 cells
+degrade"** — a clean sweep that was a broken tool. Nothing in the output said so.
+
+That is the same failure mode the ABI probe would have had on ARM, and for the same reason: a
+measurement that silently returns zero is worse than no measurement, because it reports success.
+Both now try both spellings and both symbol names, and the ABI probe *raises* if it cannot
+disassemble a symbol at all rather than counting zero stack accesses and passing.
+
+With it fixed: four cells degrade on x86, all integer division; two on ARM, both `iota` with a
+compile-time argument, where the register form is folded away in both builds and what is being
+counted is how the compiler materialises sixteen bytes. And one real hole, which is what the script
+is for: 64-bit integer `min`/`max` on ARM — no instruction at any level — was leaning on the
+compiler's vector arithmetic. `CMGT` plus `BSL` now does it in two instructions, and the cell no
+longer moves.
+
+### 9.3 Two gaps in the `SPLIT` rank
+
+§ 6 listed "the `SPLIT` rank is declared and never used" as outstanding, and § 8 gave it
+comparisons, `to_bits`, `select`, `fma` and `permute`. On ARM it is not a refinement but the main
+path — the register is 128 bits and never wider, so *every* width above four floats is a split —
+and two operations turned out never to have been given one:
+
+- **`bcast_lane`** was a lane loop at every width above the register. Its split form is *exact*,
+  where `permute`'s is a compromise: the lane it reads lives in one half, and every lane of the
+  result is that value, so it is one half-broadcast stored twice — no blend, no comparison, no
+  index arithmetic. The index has to be rebased into the chosen half (`LANE - n0` for the upper
+  one), and getting that wrong is silent: it would broadcast a neighbour and every value would
+  still look plausible. Six of the nine cells then still generic on ARM.
+- **`mask_from_bits`** likewise. `Key<void,N,Arch>` carries no item size, so one registration per
+  width decides that width's mask *flavour* and every later `select` lives with it — which is why
+  the ARM backend deliberately registers it at 4 and 2 lanes only. At 8 a 16-bit form would have
+  been correct and would have driven `select` on `SimdVec<float,8>` into a lane loop.
+
+Both improve an SSE-only x86 build by the same amount. The `mask_from_bits` split also came with a
+lesson in its own right: written with `prev_pow_2( N )` directly rather than taken from the impl's
+`split_size_0`, it self-recursed at `N = 1` — `prev_pow_2( 1 )` is 1 — and clang reported it as
+"`is0` must be initialized by a constant expression", sixty instantiations deep. The other split
+variants get the guard for free by asking the *impl* whether it splits; this one has no impl to ask,
+so the guard is explicit.
+
+### 9.4 The AArch64 ABI needed no work, and that is a measurement
+
+§ 3 is the longest section of this document because the SysV eightbyte classification cost a factor
+of two. AAPCS64 does not have it: a Homogeneous Vector Aggregate — one to four members, all the
+same vector type — travels in `v0`-`v7`, and the union that broke SysV breaks nothing here.
+
+Worth *verifying* rather than assuming, and now verified: all eight probes come out clean on ARM,
+including the eight-lane ones, where the value is two registers and no register impl exists at that
+width at all. That last part is the interesting one — it says the **split crosses a call in its
+registers**, which is the premise the library rests on and the case ARM meets first rather than as
+an edge case.
+
+The probe needed three portability fixes to say so, all of them the silent-zero kind: the stack
+pointer is `sp` and not `%rsp`, Mach-O prefixes symbols with `_`, and `--disassemble=` is a GNU
+spelling. And it gained three symbols: eight lanes is one register on AVX2 and *two* on any ARM
+part, so nothing had ever measured a value that fits in a single register — the case where going
+through memory is least excusable.
+
+### 9.5 What the backend costs, where it costs anything
+
+Two honest numbers, both regressions, both understood.
+
+**Integer `div`**: 20 instructions against 12 at `SI32 × 4`, and the same four `sdiv`s either way.
+Adding a register impl makes `values` a vector type, and the compiler lowers a vector integer
+division by extracting each lane, dividing, and inserting. There is no SIMD integer division on
+either architecture, so there is nothing to dispatch to that would fix it; `no_vecext.sh` already
+carried a note about this cell on x86, and on ARM the sign is reversed.
+
+**`sum` in `bench_ops.cpp`**: 0.51 → 0.65 ns/op at the native width, and it is **not** `ADDV` being
+slow. Removing the `ADDV` form changes nothing — 0.65 either way — and a standalone micro-benchmark
+puts `ADDV` and a `faddp` ladder within noise of each other. The disassembly gives the real answer:
+the generic form is plain code, so clang **unrolled the benchmark loop eightfold** (35 `fadd.4s`,
+28 `fadd`) and hid the latency of the dependency chain through the accumulator. It cannot unroll
+through an opaque intrinsic, so the compact loop pays full reduction latency every iteration.
+
+Fewer instructions per call, less freedom for the optimiser around the call. That is the trade every
+intrinsic makes, and it is worth writing down because the instruction count — the thing
+`no_vecext.sh` measures — says the opposite: 5 against 5 at four lanes, 6 against 8 at eight, 9
+against 14 at sixteen. Both measurements are right about different things.
+
+### 9.6 What is left
+
+Three cells on ARM reach nothing better than a lane loop, and they are one cell three times:
+`permute` on `double`. The index vector is always `SimdVec<SI32,N>`, and at two lanes that is 64
+bits of a 128-bit register — no register impl, so no `idx.data.reg` to build a `TBL` control from.
+x86 leaves the identical cell generic for the identical reason. The 4- and 8-lane cases follow from
+it: the split form asks the half whether it has anything better, and § 8.2's lesson is that
+`available` has to mean it.
+
+A `TBL`-based two-lane form would unlock all three. It is buildable — narrow the index through
+`vmovn`, mask, look up — and whether it beats a memory round trip *at two lanes* is unmeasured.
+Registering it on the assumption that it does is exactly what § 8.2 was about.
+
+**MSVC on ARM64 is unverified**, the same way MSVC on x86 is: `<arm64_neon.h>` rather than
+`<arm_neon.h>`, `__prefetch` rather than `__builtin_prefetch`, and none of the `__ARM_FEATURE_*`
+macros defined at all — so `arm_intrin.h` takes what the architecture guarantees (Advanced SIMD and
+FMLA) and nothing more, which is the same conservative reading it gives MSVC below `/arch:AVX`.
+Reasoned from documented behaviour, not measured. The MSVC *constraint* is measured on both
+architectures, through `ASIMD_NO_COMPILER_VECTORS`: the whole suite passes with the compiler's
+vector types switched off, on ARM as on x86.

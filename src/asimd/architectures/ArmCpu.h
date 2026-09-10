@@ -1,23 +1,10 @@
 #pragma once
 
 #include "GenericFeatures.h"
-#include "SimdFeatureOn.h"
+#include "ArmCpuFeatures.h"
 #include "FeatureSet.h"
 
 namespace asimd {
-
-namespace features {
-
-#define ASIMD_CMON_TYPES float,double,std::int8_t,std::int16_t,std::int32_t,std::int64_t,std::uint8_t,std::uint16_t,std::uint32_t,std::uint64_t
-
-/// 128 bits, 32 registers on AArch64. Declared here so `NativeCpu` can name the width before any
-/// backend exists: `SimdVec<float>` is then four lanes running through the generic forms, which
-/// is correct and slow, rather than a compile error.
-struct NEON : SimdFeatureOn<128,32,ASIMD_CMON_TYPES> { static std::string name() { return "NEON"; } };
-
-#undef ASIMD_CMON_TYPES
-
-} // namespace features
 
 /**
 */

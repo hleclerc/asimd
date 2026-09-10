@@ -12,6 +12,11 @@
 #
 #   ./no_vecext.sh                 -march=native
 #   ./no_vecext.sh "-msse2"
+#   ./no_vecext.sh "-march=armv8-a"
+#
+# IT MATTERS MORE ON ARM, NOT LESS. MSVC's ARM64 target is a real one, and there the register is
+# 128 bits and never wider -- so every width above four floats is a split, and a hole in the
+# table that gcc's vector arithmetic papers over is a hole in the flagship case.
 #
 set -u
 FLAGS=${1:--march=native}
@@ -37,9 +42,23 @@ OPS=(
   "iota|V|return V::iota( T( 3 ) );"
 )
 CELLS=( "FP32 4" "FP32 8" "FP32 16" "FP64 2" "FP64 4" "FP64 8"
-        "SI32 4" "SI32 8" "SI32 16" "PI32 8" "SI64 4" "SI64 8" )
+        "SI32 4" "SI32 8" "SI32 16" "PI32 8" "SI64 4" "SI64 8"
+        "SI16 8" "SI8 16" )
 
-count() { objdump -d --disassemble=probe "$1" 2>/dev/null | grep -cE '^\s+[0-9a-f]+:'; }
+# READING A SYMBOL OUT OF AN OBJECT FILE IS NOT PORTABLE, in two ways that both bit on the ARM
+# port. `--disassemble=` is a GNU binutils spelling and LLVM's objdump -- which is what `objdump`
+# is on macOS -- wants `--disassemble-symbols=`; and Mach-O prefixes every symbol with an
+# underscore. Getting this wrong does not fail loudly: `grep -c` on empty output is 0, so every
+# cell reads "0 instructions" and the table looks like a clean sweep.
+count() {
+    for name in probe _probe; do
+        for flag in --disassemble-symbols= --disassemble=; do
+            n=$( objdump -d "$flag$name" "$1" 2>/dev/null | grep -cE '^\s+[0-9a-f]+:' )
+            [ "${n:-0}" -gt 0 ] && { echo "$n"; return; }
+        done
+    done
+    echo 0
+}
 
 # EVERYTHING GOES THROUGH POINTERS, on purpose. Taking the arguments by value would measure the
 # wrong thing: without `vector_size` the impl holds an array, an array classifies MEMORY on the
@@ -85,8 +104,18 @@ done
 printf '\n%d of %d cells degrade without the compiler vectors (marked !!).\n' "$worse" "$total"
 cat <<'NOTE'
 
-Integer `div` is expected to stay marked, at any width: x86 has NO SIMD integer division. Both
-paths end up scalarising; with a vector type gcc reaches for a reciprocal-multiply sequence it
-cannot apply to an array. Nothing in the dispatch table can fix that, because there is no
-instruction to dispatch to. Anything else marked here is a hole in the table.
+Integer `div` is expected to stay marked, at any width and on either architecture: NEITHER x86
+NOR ARM has a SIMD integer division. Both paths end up scalarising, and the compiler reaches for
+a sequence with a vector type that it cannot apply to an array. Nothing in the dispatch table can
+fix that, because there is no instruction to dispatch to -- and note that on ARM the sign is
+REVERSED for this one cell: the vector-typed form costs a few more lane moves around the same
+number of `sdiv`s than the array form does.
+
+`iota` can also be marked, and for a reason that is not a hole either. `V::iota( T( 3 ) )` with a
+compile-time argument FOLDS COMPLETELY -- neither build emits the register form at all -- so what
+is being counted is how the compiler chooses to materialise a 16-byte constant: one load from the
+constant pool with a vector type, and a chain of `movk` into general registers without one. Both
+are correct and neither goes through the dispatch table. With a runtime `beg` the cell is even.
+
+Anything else marked here is a hole in the table.
 NOTE

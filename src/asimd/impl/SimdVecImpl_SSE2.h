@@ -247,10 +247,18 @@ ASIMD_SSE2_HSUM_I64( PI64 );
 #undef ASIMD_SSE2_HSUM_I64
 
 //// FP comparisons at 128 bits exist in SSE2 too (`cmpps` / `cmppd`, non-VEX).
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP32, 4, 32, gt, _mm_castps_si128( _mm_cmpgt_ps( a.data.reg, b.data.reg ) ) );
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP32, 4, 32, lt, _mm_castps_si128( _mm_cmplt_ps( a.data.reg, b.data.reg ) ) );
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP64, 2, 64, gt, _mm_castpd_si128( _mm_cmpgt_pd( a.data.reg, b.data.reg ) ) );
-SIMD_VEC_IMPL_CMP_OP_SIMDVEC( SSE2, FP64, 2, 64, lt, _mm_castpd_si128( _mm_cmplt_pd( a.data.reg, b.data.reg ) ) );
+////
+//// AND NOT ON AVX, which is not an optimisation but a correctness fix. `SimdVecImpl_AVX.h`
+//// registers the SAME two cells -- `FP32 x 4` and `FP64 x 2` -- with the VEX three-operand form
+//// and a predicate operand. These are ORDINARY FUNCTION OVERLOADS, not ranked variants, so on a
+//// target with both features both constraints held, neither subsumed the other, and the call
+//// was ambiguous: `any( a > b )` on four floats did not compile under `-mavx`. That is exactly
+//// the situation `Selection.h`'s KNOWN LIMITS note describes, and the remedy it prescribes --
+//// state that the older form is the FALLBACK, not a rival.
+SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( SSE2, AVX, FP32, 4, 32, gt, _mm_castps_si128( _mm_cmpgt_ps( a.data.reg, b.data.reg ) ) );
+SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( SSE2, AVX, FP32, 4, 32, lt, _mm_castps_si128( _mm_cmplt_ps( a.data.reg, b.data.reg ) ) );
+SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( SSE2, AVX, FP64, 2, 64, gt, _mm_castpd_si128( _mm_cmpgt_pd( a.data.reg, b.data.reg ) ) );
+SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( SSE2, AVX, FP64, 2, 64, lt, _mm_castpd_si128( _mm_cmplt_pd( a.data.reg, b.data.reg ) ) );
 
 } // namespace internal
 } // namespace asimd

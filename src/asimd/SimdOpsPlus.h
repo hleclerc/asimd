@@ -97,11 +97,13 @@ struct sel::Variant<ops::permute,Key<T,N,Arch>,sel::GENERIC> {
         // lanes returned `50 10 10 10 10`.
         //
         // UNSIGNED, because that is what the hardware does. `vpermps` keeps the low three bits of
-        // each index, so index -1 selects lane 7. The signed `j < 0 ? j + N : j` written here
-        // sent it to lane 7 as well at N = 8 -- by coincidence -- but to a different lane at any
-        // other width, so the generic and register forms disagreed. Reading the index as unsigned
-        // makes them agree at every power of two, and is one instruction cheaper: at a constant
-        // power-of-two N the compiler turns `% N` back into the `and`.
+        // each index, so index -1 selects lane 7 -- and ARM's `TBL` control is masked the same
+        // way, so the two backends agree without either being told about the other. The signed
+        // `j < 0 ? j + N : j` written here sent it to lane 7 as well at N = 8 -- by coincidence
+        // -- but to a different lane at any other width, so the generic and register forms
+        // disagreed. Reading the index as unsigned makes them agree at every power of two, and is
+        // one instruction cheaper: at a constant power-of-two N the compiler turns `% N` back
+        // into the `and`.
         for ( int i = 0; i < N; ++i )
             res.data.values[ i ] = tmp[ PI32( idx.data.values[ i ] ) % PI32( N ) ];
         return res;
@@ -189,9 +191,12 @@ ASIMD_PLUS_GENERIC_CMP( cmp_ge, >= );
 // `Selection.h` buys: with qualified calls to overloaded functions, putting it after the facades
 // below silently cost every bit of vectorization.
 #include "SimdOpsPlus_X86.h"
+#include "SimdOpsPlus_Neon.h"
 
 // ... and the SPLIT-rank forms, which delegate to whatever the register level above resolved to.
-// They have to come after it: `available` asks the halves what rank they reached.
+// They have to come after it: `available` asks the halves what rank they reached. On ARM that is
+// not a refinement but the main path: the register is 128 bits and never wider, so any width
+// above four floats IS a split -- see the header comment of `SimdOpsPlus_Neon.h`.
 #include "SimdOpsPlus_Split.h"
 
 namespace asimd {

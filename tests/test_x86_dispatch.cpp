@@ -78,8 +78,14 @@ static void require_the_floor() {
         sel::require_at_least<ops::cmp_gt,Key<SI32,8,A>,sel::REGISTER>();
         sel::require_at_least<ops::bcast_lane<1>,Key<float,8,A>,sel::REGISTER>();
     }
-    if constexpr ( A::template Has<features::FMA>::value ) {
+    // `Has<FMA>` ALONE IS NOT AN x86 TEST, and this block used to be written as though it were.
+    // `features::FMA` is shared with ARM -- it says the target can fuse, not which instruction
+    // does it (see GenericFeatures.h) -- so on an AArch64 build these three fired and demanded
+    // `vfmadd`-class ranks at x86 widths. It has to be conjoined with the feature that gives the
+    // WIDTH, which is also the more accurate statement: FMA without AVX cannot fuse eight lanes.
+    if constexpr ( A::template Has<features::FMA>::value && A::template Has<features::SSE2>::value )
         sel::require_at_least<ops::fma,Key<float ,4,A>,sel::REGISTER>();
+    if constexpr ( A::template Has<features::FMA>::value && A::template Has<features::AVX>::value ) {
         sel::require_at_least<ops::fma,Key<float ,8,A>,sel::REGISTER>();
         sel::require_at_least<ops::fma,Key<double,4,A>,sel::REGISTER>();
     }
@@ -135,7 +141,7 @@ int main() {
     const int r_gt   = rank_at_native_width<ops::cmp_gt, float>();
     printf( "  at the native width, SimdVec<float> gets: fma=%d permute=%d cmp_gt=%d\n",
             r_fma, r_perm, r_gt );
-    if constexpr ( A::template Has<features::FMA>::value ) CHECK( r_fma > sel::GENERIC );
+    if constexpr ( A::template Has<features::FMA>::value && A::template Has<features::SSE2>::value ) CHECK( r_fma > sel::GENERIC );
     if constexpr ( A::template Has<features::SSE2>::value ) CHECK( r_gt > sel::GENERIC );
     // a permutation ACROSS a whole register is `vpermilps` at 128 bits (AVX), `vpermps` at 256
     // (AVX2), `vpermps`/`vpermpd` at 512. So the native width has one as soon as there is AVX2 --

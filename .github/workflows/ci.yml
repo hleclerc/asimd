@@ -4,10 +4,16 @@
 # and not at all on the target that needs it, and MSVC has neither `vector_size` nor the `__SSE2__`
 # spelling the whole feature detection used to be written against.
 #
-# Three jobs:
-#   linux    gcc and clang, five ISA levels, plus the compile map and the MSVC-path simulation
+# Four jobs:
+#   linux    gcc and clang on x86-64, five ISA levels, plus the compile map and the MSVC-path
+#            simulation
+#   arm      gcc and clang on AArch64, the same treatment at ARM's feature levels -- on a NATIVE
+#            arm64 runner, so the tests RUN rather than merely compile. That matters: the ARM
+#            backend was written on one, and the interesting failures (a wrong `TBL` control
+#            byte, a `to_bits` reduction that drops the top lanes) change values, not
+#            compilability
 #   windows  MSVC, four /arch: levels
-#   probes   the ABI check, which reads the disassembly and is gcc/objdump-specific
+#   probes   the ABI check, which reads the disassembly
 
 name: ci
 
@@ -24,7 +30,7 @@ jobs:
       fail-fast: false
       matrix:
         cxx: [ g++, clang++ ]
-    name: linux / ${{ matrix.cxx }}
+    name: linux x86-64 / ${{ matrix.cxx }}
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +63,87 @@ jobs:
         if: matrix.cxx == 'g++'
         working-directory: tests
         run: ./no_vecext.sh
+
+  # AArch64, natively. `ubuntu-24.04-arm` is a real arm64 runner, so every test is RUN: the ARM
+  # backend's failure modes are wrong VALUES (a byte index off by one in a `TBL` control, a
+  # `to_bits` reduction that overflows a `uint8_t` and loses the top eight lanes), and a
+  # compile-only job would have caught neither.
+  #
+  # `run_all_isa.sh` and `compile_matrix.sh` read the feature levels off the compiler's
+  # `-dumpmachine`, so the same two scripts drive both architectures with no flags passed in.
+  arm:
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [ g++, clang++ ]
+    name: linux aarch64 / ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install clang
+        if: matrix.cxx == 'clang++'
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - name: compiler version
+        run: ${{ matrix.cxx }} --version
+
+      # Every test at every ARM feature level, plus the two ASIMD_NO_COMPILER_VECTORS rows --
+      # which matter more here than on x86, not less: MSVC's ARM64 target is a real one, and on
+      # ARM the register never exceeds 128 bits, so every width above four floats is a split.
+      - name: tests, every ISA level
+        working-directory: tests
+        run: ./run_all_isa.sh ${{ matrix.cxx }}
+
+      - name: compile map
+        working-directory: tests
+        run: |
+          ./compile_matrix.sh ${{ matrix.cxx }} | tee /tmp/matrix.txt
+          grep -q "^0 of .* do not compile" /tmp/matrix.txt
+
+      - name: dispatch table vs. compiler vectors
+        if: matrix.cxx == 'g++'
+        working-directory: tests
+        run: ./no_vecext.sh
+
+      # The ABI check, on the convention that actually applies here. AAPCS64 passes a Homogeneous
+      # Vector Aggregate in v0-v7 and has no eightbyte classification, so the union that cost a
+      # factor of two on SysV costs nothing -- which is worth VERIFYING rather than assuming, and
+      # is why the probe now looks for `sp` on ARM and `%rsp` on x86 instead of one of the two.
+      - name: install xmake
+        run: |
+          sudo add-apt-repository -y ppa:xmake-io/xmake
+          sudo apt-get update && sudo apt-get install -y xmake
+
+      - name: abi probe and tests
+        working-directory: tests
+        run: make
+
+      # THE FEATURE LATTICE, FROM BOTH SIDES. Needs clang and nothing else: the two probe files
+      # are C, and `arm_neon.h` comes from the compiler, so no cross toolchain or sysroot is
+      # involved. This is the check that says `features::NEON` and `features::ASIMD` are drawn
+      # where the instruction set is actually drawn -- and it runs on a laptop too, which is why
+      # it is the one to trust.
+      - name: arm feature lattice
+        working-directory: tests
+        run: |
+          command -v clang >/dev/null || { sudo apt-get update && sudo apt-get install -y clang; }
+          ./check_arm_lattice.sh clang
+
+      # THE 32-BIT ARM LATTICE THROUGH THE REAL HEADERS, which no runner is. Compile only, and
+      # compile only is the point:
+      # everything registered against `features::NEON` alone must be an instruction an ARMv7-A
+      # part really has, and the way that breaks is a build failure on the target that needs it
+      # -- never on the machine it was written on. This is the ARM half of the lesson the x86
+      # feature lattice was rewritten for.
+      - name: armv7 cross build
+        if: matrix.cxx == 'g++'
+        run: |
+          sudo apt-get install -y g++-arm-linux-gnueabihf
+          for t in test_ops test_split test_selection test_arm_ops test_arm_dispatch; do
+            arm-linux-gnueabihf-g++ -std=c++20 -O2 -mfpu=neon -mfloat-abi=hard \
+              -I src -I tests -c "tests/$t.cpp" -o "/tmp/$t.o"
+          done
 
   windows:
     runs-on: windows-latest

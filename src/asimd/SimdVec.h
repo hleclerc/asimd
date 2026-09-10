@@ -2,6 +2,7 @@
 
 #include "impl/SimdVecImpl_Generic.h"
 #include "impl/SimdVecImpl_X86.h" // IWYU pragma: export
+#include "impl/SimdVecImpl_Arm.h" // IWYU pragma: export
 
 #include "SimdMask.h"
 #include "SimdSize.h"

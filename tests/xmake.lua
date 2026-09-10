@@ -48,8 +48,15 @@ end
 
 -- The upstream tests (`test_SimdVec.cpp` & co) need Catch2, which nothing else here requires: they
 -- are kept but not built. Hence an explicit list rather than a glob.
+-- BOTH BACKENDS' TESTS ARE BUILT ON BOTH ARCHITECTURES, and that is deliberate rather than
+-- wasteful. `test_x86_ops.cpp` names `X86Cpu<64,SSE2,SSE>` explicitly, so on an ARM host it
+-- still checks that an architecture with no register impls gives the right answers through the
+-- generic forms -- and its grid runs on `NativeCpu`, i.e. on NEON. The same holds the other way:
+-- `test_arm_ops.cpp` on an x86 host exercises `ArmCpu<64,NEON,FMA>` with nothing registered
+-- under it. Each file is a value test everywhere and a backend test on its own target.
 for _, name in ipairs( { "test_ops", "test_split", "test_selection",
-                         "test_x86_ops", "test_x86_dispatch" } ) do
+                         "test_x86_ops", "test_x86_dispatch",
+                         "test_arm_ops", "test_arm_dispatch" } ) do
     target( name )
         set_kind( "binary" )
         add_files( name .. ".cpp" )
@@ -69,31 +76,71 @@ target( "abi_probe" )
         import( "core.base.option" )
         local obj = target:objectfiles()[ 1 ]
 
-        -- ALL FOUR MUST BE CLEAN NOW. Two of them were not when this probe was widened:
-        -- `probe_fma_f64` measured 23 instructions with 12 stack accesses because no `fma` was
-        -- registered at eight lanes of double, and `probe_sel_lane` 9 with 3 because
-        -- SIMD_MASK_IMPL_REG_LARGE still held an array and a Split in its union -- the very
-        -- layout README section 3 fixed for vectors, never applied to masks.
+        -- ALL OF THEM MUST BE CLEAN. Two were not when this probe was widened from one symbol to
+        -- five, and the two causes were different: `probe_fma_f64` had no `fma` registered at
+        -- eight lanes of double, so the generic lane loop ran; `probe_sel_lane` was a real ABI
+        -- problem, SIMD_MASK_IMPL_REG_LARGE still holding an array and a Split in its union.
+        --
+        -- The `_4` probes were added for the ARM port. Eight lanes is one register on AVX2 and
+        -- two on any ARM part, so without them the probe never measured a value that fits in a
+        -- SINGLE register -- the case where going through memory is least excusable.
         local must_be_clean = { "probe_fma", "probe_perm", "probe_fma_f64", "probe_sel_lane",
-                                "probe_sel_bits" }
+                                "probe_sel_bits",
+                                "probe_fma_4", "probe_perm_4", "probe_sel_4" }
+
+        -- THREE THINGS DIFFER BETWEEN HOSTS, and all three broke this check on ARM.
+        --
+        --   THE STACK POINTER IS NOT CALLED `%rsp`. It is `sp` on AArch64, so the pattern that
+        --   detects a spill has to follow the architecture. Left as it was, the check would have
+        --   passed on ARM by never matching anything -- a green light that means nothing, which
+        --   is worse than no check.
+        --
+        --   MACH-O PREFIXES SYMBOLS WITH AN UNDERSCORE. `_probe_fma`, not `probe_fma`.
+        --
+        --   `--disassemble=` IS A GNU BINUTILS SPELLING. LLVM's objdump -- which is what
+        --   `objdump` is on macOS -- wants `--disassemble-symbols=`. Both are tried.
+        local is_arm  = ( os.arch() or "" ):find( "arm" ) ~= nil or ( os.arch() or "" ):find( "aarch64" ) ~= nil
+        local stack_re = is_arm and "%f[%w]sp%f[%W]" or "%%rsp"
+        local stack_nm = is_arm and "sp" or "%rsp"
+
+        local function disassemble( sym )
+            for _, name in ipairs( { sym, "_" .. sym } ) do
+                for _, flag in ipairs( { "--disassemble-symbols=", "--disassemble=" } ) do
+                    -- `try`, not `pcall`: xmake's sandbox does not expose `pcall`, and a
+                    -- wrong flag or a missing symbol makes `objdump` exit non-zero, which
+                    -- `os.iorunv` turns into an error rather than a return value.
+                    local dis = try { function () return os.iorunv( "objdump", { "-d", flag .. name, obj } ) end }
+                    if dis and dis:find( "%x+:" ) then return dis end
+                end
+            end
+            return nil
+        end
 
         local function count( sym )
-            local dis = os.iorunv( "objdump", { "-d", "--disassemble=" .. sym, obj } )
-            local n_rsp, n_tot = 0, 0
+            local dis = disassemble( sym )
+            if not dis then return nil, nil end
+            local n_stack, n_tot = 0, 0
             for line in dis:gmatch( "[^\n]+" ) do
                 if line:match( "^%s+%x+:" ) then
                     n_tot = n_tot + 1
-                    if line:match( "%%rsp" ) then n_rsp = n_rsp + 1 end
+                    if line:match( stack_re ) then n_stack = n_stack + 1 end
                 end
             end
-            return n_tot, n_rsp
+            return n_tot, n_stack
         end
 
-        cprint( "${bright}ABI probe${clear} (a value crossing a call by value):" )
+        cprint( "${bright}ABI probe${clear} (a value crossing a call by value, %s):", os.arch() )
         for _, sym in ipairs( must_be_clean ) do
-            local n_tot, n_rsp = count( sym )
-            cprint( "  %-16s %2d instructions, %d touching %%rsp", sym, n_tot, n_rsp )
-            if n_rsp > 0 then
+            local n_tot, n_stack = count( sym )
+            if not n_tot then
+                -- NOT SILENTLY OK. A probe that cannot be read is a probe that is not checking
+                -- anything, and this whole target exists because a `static_assert` cannot see an
+                -- ABI regression.
+                raise( sym .. ": could not disassemble it out of " .. obj .. ". `objdump` is "
+                    .. "needed for this check; on macOS it comes with the command line tools." )
+            end
+            cprint( "  %-16s %2d instructions, %d touching %s", sym, n_tot, n_stack, stack_nm )
+            if n_stack > 0 then
                 raise( sym .. ": this value is passed through MEMORY. Either the union in "
                     .. "SIMD_VEC_IMPL_REG / SIMD_MASK_IMPL_REG_LARGE has grown an array or a "
                     .. "Split again (README, section 3), or the operation lost its register "

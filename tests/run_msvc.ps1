@@ -1,5 +1,10 @@
 # EVERY TEST, AT EVERY MSVC /arch: LEVEL.
 #
+# x64 ONLY. MSVC also targets ARM64, where `<arm64_neon.h>` replaces `<arm_neon.h>` and none of
+# the `__ARM_FEATURE_*` macros exist -- `impl/arm_intrin.h` handles both, unseen. Adding an ARM64
+# leg here needs a cross build (`vcvarsall arm64`) and a runner to execute it on; until then that
+# configuration is reasoned, not measured, exactly as MSVC x64 was before this script.
+#
 # The Windows counterpart of `run_all_isa.sh`. MSVC does not take `-msse2` / `-mavx2`; on x64 it
 # has exactly four levels, and the baseline one has no flag at all because SSE2 is architectural
 # there.
@@ -23,7 +28,13 @@ $inc   = Join-Path $here "..\src"
 $tmp   = Join-Path $env:TEMP ( "asimd_" + [guid]::NewGuid().ToString("N").Substring(0,8) )
 New-Item -ItemType Directory -Path $tmp | Out-Null
 
-$tests = @( "test_ops", "test_split", "test_selection", "test_x86_ops", "test_x86_dispatch" )
+# The ARM tests are in the list on purpose. On an x64 MSVC build `SimdOpsPlus_Neon.h` is
+# `#if`'d out entirely, so `ArmCpu<64,NEON,FMA>` has no registrations under it -- which makes
+# `test_arm_ops.cpp` a check that the GENERIC forms give the right answers for an architecture
+# with no backend, run under the one compiler that has no `vector_size` to fall back on. That is
+# the hardest configuration the generic path ever sees, and nothing else exercises it.
+$tests = @( "test_ops", "test_split", "test_selection", "test_x86_ops", "test_x86_dispatch",
+            "test_arm_ops", "test_arm_dispatch" )
 # label, extra flags, run it?
 $levels = @(
     @{ name = "SSE2 (x64 baseline)"; flags = @();                 run = $true          },
