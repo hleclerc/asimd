@@ -75,7 +75,12 @@ for isa in "${ISAS[@]}"; do
         fi
         "$TMP/$t" > "$TMP/$t.out" 2>&1 || rc=1
         grep -E "^$t|failures" "$TMP/$t.out" | sed 's/^/  /'
-        grep -E "^  broken|^  FAIL" "$TMP/$t.out" | sed 's/^/  /'
+        # EVERY VERDICT LINE, not two of them. This was `^  broken|^  FAIL`, which silently
+        # dropped `check.h`'s `XPASS` -- a known-broken assertion that starts passing, i.e. the
+        # one line that says "go promote this to a CHECK" -- and dropped every diagnostic a test
+        # prints next to a failure. A filter is a place where information goes to die; this one
+        # ate the only useful output of an MSVC-only failure and cost a CI round trip.
+        grep -E "^  (FAIL|broken|XPASS|info)" "$TMP/$t.out" | sed 's/^/  /'
     done
 done
 

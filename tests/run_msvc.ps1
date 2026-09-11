@@ -67,7 +67,9 @@ foreach ( $lvl in $levels ) {
         if ( $lvl.run ) {
             $res = & $exe
             if ( $LASTEXITCODE -ne 0 ) { $failed = $true }
-            $res | Select-String -Pattern "^$t|FAIL|broken" | ForEach-Object { Write-Host "  $_" }
+            # every verdict line and every diagnostic beside it -- see the note on the same
+            # filter in `run_all_isa.sh`. `XPASS` and `info` were being dropped.
+            $res | Select-String -Pattern "^$t|FAIL|broken|XPASS|info" | ForEach-Object { Write-Host "  $_" }
         }
     }
 }

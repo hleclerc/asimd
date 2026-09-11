@@ -43,14 +43,31 @@ using V7 = ArmCpu<64, features::NEON, features::FMA>;
 ///   most likely to be miscompiled -- and it failed on MSVC at `/arch:AVX2` only, where nothing
 ///   in the library differs from `/arch:AVX` at all: `SimdVec<SI16,16>` has no register impl on
 ///   x86 below AVX-512BW, so it is the same splittable path, same `split_size_0`, at both levels.
-static bool lanes_match( const char *label, const char *what, const auto *got, const auto *want, int n ) {
-    for ( int i = 0; i < n; ++i )
-        if ( got[ i ] != want[ i ] ) {
-            printf( "  [%s] %s: lane %d is %g, expected %g\n",
-                    label, what, i, double( got[ i ] ), double( want[ i ] ) );
-            return false;
-        }
-    return true;
+/// THE PREFIX IS `info`, deliberately, and the lesson is worth more than the check. The first
+/// version of this printed `  [SI16x16] ...`, and BOTH test harnesses threw it away:
+/// `run_all_isa.sh` shows `^  broken|^  FAIL` and `run_msvc.ps1` shows `^$t|FAIL|broken`. So the
+/// diagnostic was produced, on the one compiler that needed it, and discarded by the script --
+/// costing a full CI round trip to learn nothing. (The same filters were also swallowing
+/// `check.h`'s `XPASS`, which is how a fixed known-broken bug would have gone unnoticed.) Both
+/// filters pass `info` now, and this reads like the verdicts beside it.
+///
+/// It dumps BOTH BUFFERS, not just the first bad lane: the shape of a failure is the diagnosis. An
+/// untouched upper half points at the split store; scattered differences point at the data.
+/// ONE template parameter, not two `auto`s. The two buffers are necessarily the same type, and
+/// saying so makes a mismatched call a compile error instead of a silent comparison between
+/// different types -- and removes an abbreviated-template-parameter form from a file that has to
+/// go through MSVC unseen.
+template<class T>
+static bool lanes_match( const char *label, const char *what, const T *got, const T *want, int n ) {
+    int bad = -1;
+    for ( int i = 0; i < n && bad < 0; ++i ) if ( got[ i ] != want[ i ] ) bad = i;
+    if ( bad < 0 ) return true;
+
+    printf( "  info   [%s] %s: first bad lane %d of %d\n", label, what, bad, n );
+    printf( "  info     got " ); for ( int i = 0; i < n; ++i ) printf( " %g", double( got [ i ] ) );
+    printf( "\n  info     want" ); for ( int i = 0; i < n; ++i ) printf( " %g", double( want[ i ] ) );
+    printf( "\n" );
+    return false;
 }
 
 // =============================================================================================
@@ -177,7 +194,15 @@ static void grid( const char *label ) {
         // check above -- goes through the STATIC two-argument form; the member form is reached by
         // nothing else in the suite, and forwards to it. Checking them apart is what says whether
         // a failure is in the data or in the forwarding.
-        alignas( 64 ) T o_static[ 64 ] = {}, o_member[ 64 ] = {};
+        // NO `alignas( 64 )` ON THESE TWO, and that is the point of the store being *unaligned*.
+        // They had it, for no reason: `store_unaligned` asks nothing of the address. What that
+        // bought was two more 64-byte-aligned arrays in a nested block of a function that already
+        // holds several, while `sa` and `sb` are still live in the enclosing scope -- a stack
+        // layout exotic enough that it is worth not asking for when nothing needs it, on a
+        // compiler nobody here can run. `lanes_are` aligns its own buffer, but it lives alone in
+        // its own function.
+        T o_static[ 64 ] = {};
+        T o_member[ 64 ] = {};
         V::store_unaligned( o_static, a );
         a.store_unaligned( o_member );
         CHECK_AT( label, lanes_match( label, "store_unaligned, static form", o_static, sa, N ) );

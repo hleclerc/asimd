@@ -823,16 +823,46 @@ It could not be reproduced here — the MSVC *constraint* runs clean at all thre
 (`-msse2`, `-mavx`, `-mavx2 -mfma` with `ASIMD_NO_COMPILER_VECTORS`, built **and run** this time,
 which is the gap that let this reach CI in the first place: the MSVC-path rows had only been
 compiled). So the check was rewritten to answer the question on the next run rather than to guess:
+the static and member spellings of the store, tested apart; the offending lane reported; and the
+`bool same = true; … same &= ( … )` reduction dropped, because that shape is a bool reduction over
+a counted loop — simultaneously the least informative formulation available and the most likely to
+be miscompiled. Two places in the file used it; neither does now.
 
-- it exercises the static form and the member form **separately**, so a failure says which;
-- it reports the **lane** and both values, where `[SI16x16] same` reported nothing usable;
-- and it drops the `bool same = true; … same &= ( … )` reduction. That shape is a bool reduction
-  over a counted loop, which is exactly what an auto-vectorizer reaches for — simultaneously the
-  least informative formulation available and the most likely to be miscompiled. Two places in
-  the file used it; neither does now.
+**The next run answered half of it and exposed a worse problem.** Both spellings failed, which
+clears the member forwarding — and *the diagnostic never appeared*:
 
-Anything in this suite that ends in a bare `bool` and a loop has the same two problems, and that
-is the transferable part.
+```
+    FAIL   tests\test_arm_ops.cpp:183  [SI16x16]  lanes_match( ... "static form" ... )
+    FAIL   tests\test_arm_ops.cpp:184  [SI16x16]  lanes_match( ... "member form" ... )
+```
+
+**Both harnesses were filtering it out.** `run_all_isa.sh` printed `^  broken|^  FAIL` and
+`run_msvc.ps1` `^$t|FAIL|broken`; the new line began `  [SI16x16]` and matched neither. The
+information was produced, on the one compiler that needed it, and thrown away by the script — a
+whole CI round trip to learn nothing. Both filters also swallowed `check.h`'s **`XPASS`**, which is
+the line that says a known-broken assertion has started passing and should be promoted to a
+`CHECK`: a fixed bug would have gone unannounced, indefinitely.
+
+A filter is a place where information goes to die, and this one is the fifth false verdict of this
+port. Both now pass `FAIL|broken|XPASS|info`, and the diagnostic is prefixed `info` so it reads
+like the verdicts beside it and survives the next person's filter. It dumps **both buffers**, not
+just the first bad lane: an untouched upper half points at the split store, scattered differences
+point at the data.
+
+Two things were removed from the check at the same time, on the grounds that neither earned its
+place and both were exotic on a compiler that cannot be tried here:
+
+- **`alignas( 64 )` on the two output buffers.** They feed `store_unaligned`, which asks nothing of
+  the address. What the alignment bought was two more 64-byte-aligned arrays in a nested block of a
+  function that already holds several, with `sa` and `sb` still live in the enclosing scope.
+  `lanes_are` aligns its own buffer and has never had trouble — it lives alone in its own function.
+- **The two independent `auto` parameters** of `lanes_match`, where the two buffers are necessarily
+  the same type. One template parameter says so, makes a mismatched call a compile error, and
+  removes an abbreviated-template form from a file that goes through MSVC unseen.
+
+What the library does for `SimdVec<SI16,16>` is unchanged and provably identical at `/arch:AVX` and
+`/arch:AVX2`, so if the failure survives all of that, the next run will finally say which lanes and
+in what shape.
 
 ### 9.7 What the backend costs, where it costs anything
 

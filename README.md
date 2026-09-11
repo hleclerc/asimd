@@ -495,9 +495,11 @@ Next up:
   `SimdVec<SI16,16>` fails at `/arch:AVX2` and passes at `/arch:AVX`, where the library takes the
   byte-identical path — that type has no register impl on x86 below AVX-512BW, so both levels
   split 8 + 8 through the generic forms. The same lanes are checked by fifteen other assertions in
-  the same cell, all passing. The check now tests the static and member spellings of
-  `store_unaligned` apart and reports the offending lane, so the next run says which. See
-  FINDINGS § 9.6.
+  the same cell, all passing. Both spellings of the store fail, which clears the member
+  forwarding; the needless `alignas( 64 )` on the check's own buffers is gone, and the diagnostic
+  now dumps both buffers — after a round trip lost to **both test harnesses filtering it out**,
+  which were also swallowing `check.h`'s `XPASS`, the line that says a known-broken assertion has
+  started passing. See FINDINGS § 9.6.
 - **MSVC is otherwise unverified.** Not installed on the machine this was done on, so the portability
   work is reasoned from documented behaviour, not measured — and that now includes ARM64, whose
   `<arm64_neon.h>` spelling and lack of `__ARM_FEATURE_*` macros this code handles unseen. clang
