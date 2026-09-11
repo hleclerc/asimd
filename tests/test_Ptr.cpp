@@ -1,4 +1,4 @@
-#include <asimd/Ptr.h>
+#include <asimd/asimd.h>
 #include "catch_main.h"
 #include "P.h"
 

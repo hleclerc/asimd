@@ -37,7 +37,7 @@
 //                     still held an array and a Split in its union.
 // The first of those is now caught where it belongs, by `require_at_least` in the dispatch tests
 // -- a static_assert, which names the operation instead of leaving a number to be interpreted.
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 // =============================================================================================
 // GROUP ONE -- EXACTLY ONE REGISTER, on whatever this target is. ENFORCED: any of these touching

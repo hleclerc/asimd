@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <array>
 
@@ -15,7 +16,7 @@ struct CudaGpuInfoFeature {
 
     std::size_t                      num = 0;                    /**< num gpu board */
 
-    #define NGIF( TYPE, NAME, INFO ) TYPE name;
+    #define NGIF( TYPE, NAME, INFO ) TYPE NAME;
     #include                         "CudaGpuInfoFeaturesDecl.h"
     #undef NGIF
 };

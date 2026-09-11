@@ -1,5 +1,5 @@
 // Every operation added by `SimdOpsPlus.h`, value by value.
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 
@@ -11,7 +11,7 @@ int main() {
     const V v = V::load_aligned( src );
 
     // ---- to_bits: the sign mask as an integer. This is what carries the `ctz` and the
-    // rotations, hence everything that replaces a traversal in a branchless clip.
+    // rotations, hence everything that replaces a traversal in branchless code.
     // PI64, not `unsigned`: `to_bits` returns a PI64 because a mask can be 64 lanes wide, and
     // narrowing it here is what MSVC warns about (C4244). Nothing was wrong with the value at
     // eight lanes; the type was just a smaller one than the operation hands back.

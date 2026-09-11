@@ -59,7 +59,7 @@ OPS=(
 
 job() { # $1 flags  $2 type  $3 expr  $4 outfile
   cat > "$4.cpp" <<EOF
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 using namespace asimd;
 using T = $2;
 static constexpr int NL = SimdSize<T>::value;

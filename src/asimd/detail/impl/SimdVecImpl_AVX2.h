@@ -82,8 +82,8 @@ SIMD_VEC_IMPL_REG_ARITHMETIC_OP( AVX2, SI32, 4, sll, _mm_sllv_epi32 );
 
 // iota ------------------------------------------------------------------------------------------------
 // WITHOUT THIS, `iota` falls back to the generic form -- a loop writing lane by lane -- and gcc
-// materializes it as a chain of `vpinsrd` rather than a constant load. Measured on the clipping
-// kernel: six `vpinsrd` per call, inside the hot loop.
+// materializes it as a chain of `vpinsrd` rather than a constant load. Measured: six `vpinsrd`
+// per call, inside a hot loop.
 template<class Arch> requires ( Arch::template Has<features::AVX2>::value ) HaD
 SimdVecImpl<SI32,8,Arch> iota( SI32 beg, S<SimdVecImpl<SI32,8,Arch>> ) {
     SimdVecImpl<SI32,8,Arch> res;

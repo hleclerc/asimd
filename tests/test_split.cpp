@@ -3,7 +3,7 @@
 // `SimdVec<float,8>` on an architecture capped at SSE2 must split into two four-lane registers and
 // give exactly the same answer. This is what Highway refuses at compile time ("Too many lanes"),
 // and what will decide the NEON port.
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 

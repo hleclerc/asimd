@@ -3,9 +3,7 @@
 #include <string>
 std::string ops;
 
-#include <asimd/architectures/X86Cpu.h>
-#include <asimd/NbSimdRegisters.h>
-#include <asimd/SimdVec.h>
+#include <asimd/asimd.h>
 #include "catch_main.h"
 #include "P.h"
 

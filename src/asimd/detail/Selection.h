@@ -19,8 +19,8 @@
 //   OVERLOAD RESOLUTION DEPENDS ON INCLUDE ORDER. A facade calling `internal::f(...)` through a
 //   QUALIFIED name freezes resolution at its own definition: a register form declared later is
 //   invisible. The code still compiles, still returns correct results, and silently loses all
-//   vectorization. This happened while porting a polygon clipping kernel -- it ran at scalar
-//   speed with not one `vpermps` in the binary.
+//   vectorization. This happened here: a kernel built on `permute` ran at scalar speed with not
+//   one `vpermps` in the binary.
 //
 //   AVAILABLE IS NOT BEST. On a Skylake-X, 512-bit exists and downclocks: it is slower than
 //   256-bit. An instruction-set hierarchy therefore cannot serve as a preference order --

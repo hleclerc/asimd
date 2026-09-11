@@ -68,7 +68,7 @@ count() {
 # left is the computation.
 build() { # $1 out  $2 extra-defines  $3 T  $4 N  $5 ret  $6 body
   cat > "$1.cpp" <<EOF
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 using namespace asimd;
 using T = $3; static constexpr int NL = $4;
 using V = SimdVec<T,NL>;

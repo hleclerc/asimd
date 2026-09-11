@@ -1,4 +1,4 @@
-#include <asimd/Int.h>
+#include <asimd/asimd.h>
 #include "catch_main.h"
 #include "P.h"
 

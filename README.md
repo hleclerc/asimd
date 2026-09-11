@@ -19,10 +19,11 @@ premise the library is built on is the ordinary situation on that architecture r
 exception — measured at 1.07 ns/op for an eight-lane `permute` against 1.89 for the generic
 fallback, and 0.59 against 0.85 for `to_bits`.
 
-Header-only, C++20.
+Header-only, C++20. Add `src/` to the include path and include one header — everything else
+lives under `asimd/detail/` and is not meant to be included directly:
 
 ```cpp
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 using V = asimd::SimdVec<float,8>;
 using I = asimd::SimdVec<asimd::SI32,8>;

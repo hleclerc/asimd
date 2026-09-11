@@ -20,7 +20,7 @@
 //   multiply-accumulate, native unsigned compares. Those have no cell in the x86 tests, so they
 //   need one here or they are registered and never checked.
 
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 

@@ -3,7 +3,7 @@
 // Two halves: the mechanism itself, exercised with dummy variants so the properties are pinned
 // down independently of any backend; then the ranks actually selected for the real operations on
 // the machine this is compiled for.
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 

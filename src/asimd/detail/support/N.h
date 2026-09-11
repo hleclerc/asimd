@@ -2,6 +2,7 @@
 #define ASIMD_PAREX_N_H
 
 #include <cstdint>
+#include <cstddef>
 
 namespace asimd {
 

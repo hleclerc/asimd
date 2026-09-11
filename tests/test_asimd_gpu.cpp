@@ -1,4 +1,4 @@
-#include <asimd/SimdVec.h>
+#include <asimd/asimd.h>
 #include <cuda_runtime.h>
 #include "catch_main.h"
 #include "P.h"

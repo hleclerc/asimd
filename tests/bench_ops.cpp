@@ -15,7 +15,7 @@
 //   THE FREQUENCY RAMP. Whichever variant runs first pays it. On this box that alone looked like
 //   a 1.9x regression on a loop the disassembler said was identical instruction for instruction.
 //   Hence the warm-up and the best-of-five.
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include <chrono>
 #include <cstdio>

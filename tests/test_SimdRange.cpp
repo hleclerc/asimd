@@ -1,5 +1,4 @@
-#include <asimd/architectures/X86Cpu.h>
-#include <asimd/SimdRange.h>
+#include <asimd/asimd.h>
 #include "catch_main.h"
 #include "P.h"
 

@@ -323,7 +323,7 @@ ASIMD_PLUS_BCAST( AVX512, PI64,  8, _mm512_permutexvar_epi64( _mm512_set1_epi64(
 // ---- THE SAME, AT 128 AND 256 BITS. This is what AVX-512VL is: the AVX-512 encodings, hence the
 // mask registers, on the narrower widths. Without these, a comparison at eight lanes on an
 // AVX-512 machine still produced a 256-bit LANE mask and `select` still emitted `vblendvps` --
-// measured at 3.07 ns per cut against 2.59 for intrinsics on the clipping kernel.
+// measured at 3.07 ns against 2.59 for raw intrinsics on a compare-and-select loop.
 #define ASIMD_PLUS_VL_CMP( TAG, PRED_F, PRED_I ) \
     ASIMD_PLUS_CMP( AVX512VL, TAG, FP32, 8, 1, MASK_REGISTER, _mm256_cmp_ps_mask   ( a.data.reg, b.data.reg, PRED_F ) ); \
     ASIMD_PLUS_CMP( AVX512VL, TAG, FP64, 4, 1, MASK_REGISTER, _mm256_cmp_pd_mask   ( a.data.reg, b.data.reg, PRED_F ) ); \

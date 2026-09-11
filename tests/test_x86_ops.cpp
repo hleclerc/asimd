@@ -1,6 +1,6 @@
 // x86 COVERAGE, value by value, ACROSS THE WIDTHS AND THE TYPES -- not just `float x 8`.
 //
-// `test_ops.cpp` checks every operation once, at the one width the clipping kernel used. This file
+// `test_ops.cpp` checks every operation once, at `float x 8`. This file
 // asks the other question: does the SAME operation still hold at 2, 4, 8 and 16 lanes, on FP64 and
 // on the integer types, and at the widths that are not a power of two? That is where the dispatch
 // picks a different variant -- and where it turns out to pick a wrong one.
@@ -10,7 +10,7 @@
 // as intended. See FINDINGS.md for the causes. (`check.h` still carries `KNOWN_BROKEN`, and the
 // test harnesses now print `XPASS`, which they had been filtering out.)
 
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 

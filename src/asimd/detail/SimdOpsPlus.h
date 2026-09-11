@@ -1,17 +1,17 @@
 #pragma once
 
 // =====================================================================================
-// THE MISSING PRIMITIVES -- added while porting a convex polygon clipping kernel.
+// THE PRIMITIVES BEYOND LOAD/STORE/ARITHMETIC.
 //
-// `SimdVec` already knew how to load, store, add, compare and gather. Five things were missing,
-// and they are exactly what a branchless vector clip needs:
+// `SimdVec` knows how to load, store, add, compare and gather. The five operations here are what
+// branchless vector code needs on top of that:
 //
-//   `fma`             two `vfmadd` compute the dot product of a whole cell
+//   `fma`             fused multiply-add -- a dot product is a chain of these
 //   `to_bits`         the sign mask AS AN INTEGER. It carries the `ctz`, the `popcount` and the
 //                     rotations, hence everything that replaces a traversal
 //   `mask_from_bits`  the dual: one `kmovb` where `eq( iota, i )` costs two instructions
 //   `select`          blend two vectors according to a mask
-//   `permute`         VARIABLE-INDEX permutation, by far the costliest one to port
+//   `permute`         VARIABLE-INDEX permutation, by far the costliest one to get right
 //
 // plus `eq` / `ge` (only `lt` and `gt` existed), `bcast_lane` (broadcast a compile-time lane) and
 // the `-` `*` `/` operators -- the underlying operations were already there, only the facades
@@ -234,8 +234,8 @@ PI64 to_bits( const SimdMask<N,IS,Arch> &m ) {
 
 /// THE DUAL OF `to_bits`, and it is worth having. Designating a lane through `eq( iota, i )`
 /// takes a `vpbroadcastd` then a `vpcmpeqd`; on a target with mask registers the same mask is one
-/// `kmovb` from an integer you already computed. The clipping kernel designates three lanes per
-/// cut, so that is six instructions against three, in the hottest loop there is.
+/// `kmovb` from an integer you already computed. Code that designates a few lanes per iteration
+/// pays that difference -- six instructions against three -- in its hottest loop.
 ///
 /// It is also what lets portable code express "the first n lanes", "every other lane", or any
 /// computed pattern -- all things a vector comparison can only say by abusing an `iota`.

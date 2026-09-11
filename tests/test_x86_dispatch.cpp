@@ -1,5 +1,5 @@
-// WHICH VARIANT ACTUALLY GETS PICKED, over the whole grid -- not at the one width the porting
-// work happened to need.
+// WHICH VARIANT ACTUALLY GETS PICKED, over the whole grid -- not at the one width
+// `test_ops.cpp` happens to use.
 //
 // `test_selection.cpp` checks that nothing silently drops to the generic form, and it checks it
 // for `Key<float,8,NativeCpu>`. That is exactly the cell `SimdOpsPlus_X86.h` implements, so the
@@ -14,7 +14,7 @@
 // The `require_at_least` calls below are the durable half of this file: they are static_asserts,
 // so a lost registration stops the BUILD instead of quietly costing a factor of two.
 
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 

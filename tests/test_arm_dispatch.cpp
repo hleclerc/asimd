@@ -14,7 +14,7 @@
 // The `require_at_least` calls are the durable half of this file: they are static_asserts, so a
 // lost registration stops the BUILD instead of quietly costing a factor of five.
 
-#include <asimd/SimdOpsPlus.h>
+#include <asimd/asimd.h>
 
 #include "check.h"
 
