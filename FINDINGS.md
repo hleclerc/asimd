@@ -241,7 +241,7 @@ thing to run where one exists.
 | `check.h` | `KNOWN_BROKEN( why, cond )` — a diagnosed, unfixed bug prints without failing the build and turns into a loud `XPASS` once fixed. Every one it held is now a plain `CHECK`. |
 
 `make` → 665 assertions, 0 failures. `make isa` → the same at five ISA levels, 2 860 assertions.
-`make matrix` → 408 / 408. (After § 9: 1 797 assertions per level, and `make matrix` → 544 / 544.)
+`make matrix` → 408 / 408. (After § 9: 1 833 assertions per level, and `make matrix` → 544 / 544.)
 
 ---
 
@@ -800,7 +800,8 @@ MSVC also reported a `C4244` narrowing warning in `test_ops.cpp`: `to_bits` retu
 because a mask can be 64 lanes wide, and the test stored it in an `unsigned`. The value was right
 at eight lanes; the type was smaller than the operation hands back.
 
-**And then one runtime failure, at `/arch:AVX2` only, which is still open.**
+**And then one runtime failure, at `/arch:AVX2` only. It is closed, without ever having been
+reproduced off Windows** -- see the end of this section for what that does and does not establish.
 
 ```
     FAIL   tests\test_arm_ops.cpp:157  [SI16x16]  same
@@ -861,8 +862,24 @@ place and both were exotic on a compiler that cannot be tried here:
   removes an abbreviated-template form from a file that goes through MSVC unseen.
 
 What the library does for `SimdVec<SI16,16>` is unchanged and provably identical at `/arch:AVX` and
-`/arch:AVX2`, so if the failure survives all of that, the next run will finally say which lanes and
-in what shape.
+`/arch:AVX2`.
+
+**It passes.** All four `/arch:` levels build and the three that a hosted runner can execute pass
+every assertion -- MSVC is green, which is the last claim in § 6's list to become true.
+
+What that establishes, and what it does not. The library was never implicated and still is not:
+the type has no register impl on x86 below AVX-512BW, both levels take the identical splittable
+path, and fifteen other assertions read the same lanes on the same build. What is NOT established
+is which of the three changes in that round was responsible -- the needless `alignas( 64 )` is the
+candidate, since it is the only thing the check did that `lanes_are` does not do from inside its
+own function, but the failure was never reproduced here and so nothing was ever isolated. A fix
+that cannot be attributed is worth recording as such rather than as a diagnosis.
+
+The transferable part is not about MSVC at all. Three of the five false verdicts in this section
+were measurement or reporting faults, not code faults, and the last one cost two CI rounds purely
+because a `grep` pattern in a shell script was narrower than the output it filtered. `lanes_are`
+now reports the failing lane too -- it backs hundreds of grid assertions and used to say only that
+something among them differed.
 
 ### 9.7 What the backend costs, where it costs anything
 

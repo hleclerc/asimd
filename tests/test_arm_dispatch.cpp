@@ -67,14 +67,10 @@ static void row( const char *name ) {
 ///
 /// Belt and braces on purpose. The `Selection.h` change is the one that makes the error
 /// impossible; this one makes the file structurally identical to the sibling that never hit it.
-template<class Op,class T,int N,class Arch>
-static int rank_of() { return sel::rank<Op,Key<T,N,Arch>>; }
-
-template<class Op,int N,class Arch,int IS>
-static int rank_of_mask() { return sel::rank<Op,Key<void,N,Arch,IS>>; }
-
-template<class Op,class T,int N,class Arch,int IS>
-static int rank_of_sel() { return sel::rank<Op,Key<T,N,Arch,IS>>; }
+/// ONE helper, keyed on the `Key` itself rather than on its pieces. Three of these were written
+/// -- one per shape of key -- which is three places to get the same thing right.
+template<class Op,class K>
+static int rank_of() { return sel::rank<Op,K>; }
 
 template<class Arch>
 static void grid( const char *what ) {
@@ -229,11 +225,11 @@ int main() {
     // EVERY RANK MATERIALISED FIRST, through the function templates above, and only then
     // compared -- see the note on `rank_of`. Nothing below names `sel::rank`.
     constexpr int nat = SimdSize<float,A>::value;
-    const int n_gt   = rank_of     <ops::cmp_gt ,float,nat,A>();
-    const int n_sel  = rank_of_sel <ops::select ,float,nat,A,32>();
-    const int n_perm = rank_of     <ops::permute,float,nat,A>();
-    const int n_bits = rank_of_mask<ops::to_bits,      nat,A,32>();
-    const int n_fma  = rank_of     <ops::fma    ,float,nat,A>();
+    const int n_gt   = rank_of<ops::cmp_gt , Key<float,nat,A>>();
+    const int n_sel  = rank_of<ops::select , Key<float,nat,A,32>>();
+    const int n_perm = rank_of<ops::permute, Key<float,nat,A>>();
+    const int n_bits = rank_of<ops::to_bits, Key<void ,nat,A,32>>();
+    const int n_fma  = rank_of<ops::fma    , Key<float,nat,A>>();
     printf( "  at the native width (%d lanes), SimdVec<float> gets:"
             " cmp_gt=%d select=%d permute=%d to_bits=%d fma=%d\n",
             nat, n_gt, n_sel, n_perm, n_bits, n_fma );

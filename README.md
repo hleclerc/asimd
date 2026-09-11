@@ -336,7 +336,7 @@ calls xmake, so `make` works for anyone who would rather not learn a new tool.
 | `test_selection` | total order, independence from declaration order, the safety net |
 | `test_x86_ops` | **665 assertions.** A grid drives every operation over 23 (type, width) pairs — FP32/FP64/SI32/PI32/SI64/PI64/SI16 from 2 to 32 lanes, plus widths that are not a power of two and one wider than any register. Each pair lands on a different variant per target, and all of them must agree |
 | `test_x86_dispatch` | the (operation, type, width) rank grid: which variant is *actually* selected, everywhere rather than at one width — and `require_at_least` on each cell that must have one, so a lost registration fails the **build** |
-| `test_arm_ops` | **1 100 assertions.** The same grid over the ARM types and widths — including the 16- and 8-bit lanes, which Advanced SIMD covers uniformly and SSE does not — *and then the whole grid again over `ArmCpu<64,NEON,FMA>`*, the ARMv7-A floor, on whatever host it is compiled on. Everything A64-only has to disappear from under it and leave the **same answers** behind. Plus the operations x86 has no cell for: the per-lane variable shift and the integer multiply-accumulate |
+| `test_arm_ops` | **1 136 assertions.** The same grid over the ARM types and widths — including the 16- and 8-bit lanes, which Advanced SIMD covers uniformly and SSE does not — *and then the whole grid again over `ArmCpu<64,NEON,FMA>`*, the ARMv7-A floor, on whatever host it is compiled on. Everything A64-only has to disappear from under it and leave the **same answers** behind. Plus the operations x86 has no cell for: the per-lane variable shift and the integer multiply-accumulate |
 | `test_arm_dispatch` | the rank grid and the floor, twice — at this target and at the ARMv7 floor, which is what says the two feature levels are really separate. And the **`SPLIT` floor**, which on ARM is the one that matters: every width above four floats must reach it, or the library is going through the stack for a value that fits in two registers |
 
 Both backends' tests are built on both architectures, deliberately: `test_x86_ops.cpp` names
@@ -417,9 +417,9 @@ are in [FINDINGS.md](FINDINGS.md). Where it stood, and where it stands:
 | … ARM, reaching `REGISTER` or `SPLIT` rather than a lane loop | 0 / 63 | **60 / 63** |
 | operations returning wrong values | 5 | **0** |
 | values passed through memory across a call, at a width that IS one register | 2 of 5 probes | **0 of 6 enforced probes**, on 5 x86 levels and on ARM |
-| value assertions, per feature level | 29 (one level) | **1 797**, at 5 x86 levels and 6 ARM ones |
+| value assertions, per feature level | 29 (one level) | **1 833**, at 5 x86 levels and 6 ARM ones |
 | cells needing the compiler's vector extensions to be fast (the MSVC gap) | 12 / 168 | **4 / 196** on x86, all integer division; **2 / 196** on ARM, both a constant-folding artefact |
-| compilers the suite runs under | 1 | **gcc 13, gcc 15, clang, MSVC** |
+| compilers the suite runs under | 1 | **gcc 13, gcc 15, clang, MSVC** — all four now RUN it, not just build it |
 | MSVC `/arch:` levels that compile, via the no-vector-extension path | — | **4 / 4** |
 
 ### What the ARM port found in the x86 code
@@ -491,21 +491,27 @@ Next up:
 - **`DOTPROD` and `I8MM` want a new operation.** `SDOT` accumulates four 8-bit products into each
   32-bit lane; it is a *reduction*, so it is not a variant of `fma` but an operation of its own.
   x86 has nothing below AVX-512-VNNI to match it.
-- **One MSVC failure is open**, and narrowed rather than guessed at: a store round trip on
-  `SimdVec<SI16,16>` fails at `/arch:AVX2` and passes at `/arch:AVX`, where the library takes the
-  byte-identical path — that type has no register impl on x86 below AVX-512BW, so both levels
-  split 8 + 8 through the generic forms. The same lanes are checked by fifteen other assertions in
-  the same cell, all passing. Both spellings of the store fail, which clears the member
-  forwarding; the needless `alignas( 64 )` on the check's own buffers is gone, and the diagnostic
-  now dumps both buffers — after a round trip lost to **both test harnesses filtering it out**,
-  which were also swallowing `check.h`'s `XPASS`, the line that says a known-broken assertion has
-  started passing. See FINDINGS § 9.6.
-- **MSVC is otherwise unverified.** Not installed on the machine this was done on, so the portability
-  work is reasoned from documented behaviour, not measured — and that now includes ARM64, whose
-  `<arm64_neon.h>` spelling and lack of `__ARM_FEATURE_*` macros this code handles unseen. clang
-  *is* verified: on x86 at five feature levels and on AArch64 at six. The MSVC *path* is verified
-  on both architectures through `ASIMD_NO_COMPILER_VECTORS`, which is the constraint, not the
-  compiler.
+- **MSVC now runs, and it is green** — the last thing on this list to become true. All four
+  `/arch:` levels build and the three that can be executed on a hosted runner pass every
+  assertion. It took three rounds and each one found something: a compile error from
+  array-to-pointer decay (§ 6), a runtime failure, and then the discovery that **both test
+  harnesses were filtering out the diagnostic that would have explained it** — and swallowing
+  `check.h`'s `XPASS` along with it.
+
+  The runtime failure was on a store round trip at `/arch:AVX2` only, and it is closed without
+  ever having been reproduced off Windows: it went away once the check's own two output buffers
+  stopped asking for `alignas( 64 )` they never needed — they feed `store_unaligned`. Which of the
+  three changes made in that round actually did it is not established, and is written down as not
+  established. The library was never implicated: `SimdVec<SI16,16>` has no register impl on x86
+  below AVX-512BW, so `/arch:AVX` and `/arch:AVX2` take the byte-identical splittable path, and
+  the same lanes are read by fifteen other passing assertions in the same cell. See FINDINGS § 9.6.
+
+- **MSVC's ARM64 target is still unverified**, and is the honest remainder: `<arm64_neon.h>`
+  rather than `<arm_neon.h>`, `__prefetch` rather than `__builtin_prefetch`, and none of the
+  `__ARM_FEATURE_*` macros defined at all, so `arm_intrin.h` takes what the architecture
+  guarantees and nothing more. Reasoned from documented behaviour, not measured — adding a leg
+  for it needs a cross build and a runner to execute on.
+
 - **A two-lane `permute` of 64-bit elements** would close the last three generic cells on ARM by
   unlocking the split at 4 and 8 lanes. It is buildable — narrow the index, `TBL` — and whether it
   beats a memory round trip at two lanes is unmeasured. Guessing is what `available` exists to

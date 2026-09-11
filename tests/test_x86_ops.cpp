@@ -5,8 +5,10 @@
 // on the integer types, and at the widths that are not a power of two? That is where the dispatch
 // picks a different variant -- and where it turns out to pick a wrong one.
 //
-// Every `KNOWN_BROKEN` below is a diagnosed bug, reproduced here. It prints, it does not fail the
-// build, and it turns into a loud XPASS the day it is fixed. See FINDINGS.md for the causes.
+// There are no `KNOWN_BROKEN` entries left in this file: every bug the audit diagnosed here has
+// been fixed, and each one turned into a loud XPASS on the way -- which is the mechanism working
+// as intended. See FINDINGS.md for the causes. (`check.h` still carries `KNOWN_BROKEN`, and the
+// test harnesses now print `XPASS`, which they had been filtering out.)
 
 #include <asimd/SimdOpsPlus.h>
 

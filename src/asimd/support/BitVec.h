@@ -29,7 +29,9 @@ public:
     constexpr int size        () const { return nb_items; }
 
     bool          all         () const { bool res = 1; for_each_int( [&]( auto v, auto m ) { res &= ( v == m ); } ); return res; }
-    bool          any         () const { bool res = 0; for_each_int( [&]( auto v, auto m ) { res |= ( v != 0 ); } ); return res; }
+    /// the mask argument is unnamed on purpose: `any` does not need it, and naming it was the one
+    /// `-Wextra` warning left in the build.
+    bool          any         () const { bool res = 0; for_each_int( [&]( auto v, auto ) { res |= ( v != 0 ); } ); return res; }
     
 private:
     PI8           data[ ( nb_items + 7 ) / 8 ];

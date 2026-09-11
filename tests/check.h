@@ -47,13 +47,28 @@ inline void check_known_broken( bool ok, const char *what, const char *file, int
 #define KNOWN_BROKEN( why, ... ) check_known_broken( ( __VA_ARGS__ ), #__VA_ARGS__, __FILE__, __LINE__, why )
 
 /// compares a vector against a list of expected values.
+///
+/// IT REPORTS THE LANE, which it did not, and that is most of what this helper is for. It backs
+/// hundreds of grid assertions through `CHECK_AT( label, lanes_are( ... ) )`, and a failure used
+/// to print the label and the expression and nothing else -- "something among these lanes
+/// differs". Twice in one week that was the whole of the information available about a failure on
+/// a compiler that could not be run locally, and twice it cost a full CI round trip to get the
+/// number that was one `printf` away.
+///
+/// `check_lanes`, just below, has always reported it; `lanes_are` is the variant used where the
+/// caller also has a label, and it was the one that said nothing. The `info` line is printed
+/// BEFORE the `FAIL` line it belongs to, because the comparison necessarily runs first -- and the
+/// prefix matches the one the test harnesses' filters pass.
 template<class V, class T>
 inline bool lanes_are( const V &v, const T *expected, int n ) {
     alignas( 64 ) typename V::T got[ 64 ] = {};
     V::store_unaligned( got, v );
     for ( int i = 0; i < n; ++i )
-        if ( ! ( std::abs( double( got[ i ] ) - double( expected[ i ] ) ) < 1e-6 ) )
+        if ( ! ( std::abs( double( got[ i ] ) - double( expected[ i ] ) ) < 1e-6 ) ) {
+            printf( "  info   lane %d of %d is %g, expected %g -- see the FAIL below\n",
+                    i, n, double( got[ i ] ), double( expected[ i ] ) );
             return false;
+        }
     return true;
 }
 
