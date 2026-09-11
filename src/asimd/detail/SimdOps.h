@@ -12,6 +12,10 @@
 //   `gt` `lt` `eq` `ge`  comparisons materialized as a mask, in whatever flavour the target has
 //   `rotate_lanes`    lanes `[0,n)` rotated by `k` -- `k` and `n` each compile-time (`N<>`) or not
 //   `ext_lanes<K>`    `a[K..N) ++ b[0..K)`: `EXT` / `alignr`, the primitive a rotation is made of
+//   `add` `sub` `mul` `div` `min` `max` `sum`  the arithmetic as free functions, so that they can
+//                     take a LANE SET (`LaneSet.h`): `add( a, b, LaneRange<0,3>() )` computes
+//                     only the registers that hold lanes 0-2. `fma`, `select`, the comparisons,
+//                     `sum`, `to_bits`, `any` and `all` take one too.
 //
 // This file holds the FACADES only: each one names an operation tag and a `Key`, and lets
 // `Selection.h` pick the highest-ranked variant registered for it. The variants live in `ops/`:
@@ -29,6 +33,7 @@
 // (`tbl`) are a single instruction.
 // =============================================================================================
 
+#include "LaneSet.h"
 #include "ops/Key.h"
 #include "ops/Generic.h"
 
@@ -180,6 +185,189 @@ template<int k,class T,int W,class Arch>
 SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, N<k>, int n ) {
     return internal::rotate_lanes_rt<0>( v, k, n );
 }
+
+// =====================================================================================
+// LANE SETS -- the trailing argument. See `LaneSet.h` for the contract: lanes outside the set
+// are UNSPECIFIED in a vector result, EXCLUDED from a reduction.
+//
+// Only lane-wise operations take one. A permutation reads every lane of its input whatever the
+// caller wants of its output, so `permute`, `rotate_lanes` and `ext_lanes` do not -- and
+// `rotate_lanes` already has `n`, which is the prefix it moves and leaves the rest untouched.
+// =====================================================================================
+
+namespace internal {
+    template<class X0,class... X> struct FirstOf { using type = X0; };
+
+    /// a lane-wise op through `sel::call`, keyed on the width of whatever impl it is handed --
+    /// which is how the same lambda serves the whole vector and each of its halves.
+    template<class Op,class T,class Arch>
+    struct LaneWise {
+        template<class... X>
+        auto operator()( const X &...x ) const {
+            return sel::call<Op,Key<T,width_of<typename FirstOf<X...>::type>,Arch>>( x... );
+        }
+    };
+    template<class Op,class T,class Arch>
+    struct LaneWiseSelect {
+        template<class M,class X>
+        auto operator()( const M &m, const X &a, const X &b ) const {
+            return sel::call<Op,Key<T,width_of<X>,Arch,item_size_of<M>>>( m, a, b );
+        }
+    };
+}
+
+#define ASIMD_LANEWISE_ARITH( NAME, IMPL ) \
+    template<class T,int W,class Arch> \
+    SimdVec<T,W,Arch> NAME( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b ) { \
+        return IMPL( a.impl, b.impl ); \
+    } \
+    template<class T,int W,class Arch,LaneSet S> \
+    SimdVec<T,W,Arch> NAME( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s ) { \
+        return internal::prune( s, []( const auto &x, const auto &y ) { return IMPL( x, y ); }, a.impl, b.impl ); \
+    }
+
+ASIMD_LANEWISE_ARITH( add, internal::add )
+ASIMD_LANEWISE_ARITH( sub, internal::sub )
+ASIMD_LANEWISE_ARITH( mul, internal::mul )
+ASIMD_LANEWISE_ARITH( div, internal::div )
+#undef ASIMD_LANEWISE_ARITH
+
+// `min` / `max` without a set are in `SimdVec.h`
+template<class T,int W,class Arch,LaneSet S>
+SimdVec<T,W,Arch> min( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s ) {
+    return internal::prune( s, []( const auto &x, const auto &y ) { return internal::min( x, y ); }, a.impl, b.impl );
+}
+template<class T,int W,class Arch,LaneSet S>
+SimdVec<T,W,Arch> max( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s ) {
+    return internal::prune( s, []( const auto &x, const auto &y ) { return internal::max( x, y ); }, a.impl, b.impl );
+}
+
+template<class T,int W,class Arch,LaneSet S>
+SimdVec<T,W,Arch> fma( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const SimdVec<T,W,Arch> &c, const S &s ) {
+    return internal::prune( s, internal::LaneWise<ops::fma,T,Arch>(), a.impl, b.impl, c.impl );
+}
+
+template<class T,int W,int IS,class Arch,LaneSet S>
+SimdVec<T,W,Arch> select( const SimdBool<W,IS,Arch> &m, const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s ) {
+    return internal::prune( s, internal::LaneWiseSelect<ops::select,T,Arch>(), m.impl, a.impl, b.impl );
+}
+
+#define ASIMD_LANEWISE_CMP( NAME, TAG ) \
+    template<class T,int W,class Arch,LaneSet S> \
+    auto NAME( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s ) { \
+        return simd_bool_from_simd_bool_impl( internal::prune( s, internal::LaneWise<ops::TAG,T,Arch>(), a.impl, b.impl ) ); \
+    }
+ASIMD_LANEWISE_CMP( gt, cmp_gt )
+ASIMD_LANEWISE_CMP( lt, cmp_lt )
+ASIMD_LANEWISE_CMP( eq, cmp_eq )
+ASIMD_LANEWISE_CMP( ge, cmp_ge )
+#undef ASIMD_LANEWISE_CMP
+
+/// a selection driven by a lazy comparison, both pruned
+template<class T,class U,int W,class Arch,LaneSet S>
+SimdVec<U,W,Arch> select( const internal::Op_gt<T,W,Arch> &op, const SimdVec<U,W,Arch> &a, const SimdVec<U,W,Arch> &b, const S &s ) {
+    const auto m = internal::prune( s, internal::LaneWise<ops::cmp_gt,T,Arch>(), op.a, op.b );
+    return internal::prune( s, internal::LaneWiseSelect<ops::select,U,Arch>(), m, a.impl, b.impl );
+}
+
+// ---- reductions: the set is part of the answer -----------------------------------------------
+namespace internal {
+    /// a lane of all ones, in T's own bits
+    template<class T> constexpr T all_ones_lane() {
+        using U = typename PI_<8 * sizeof( T )>::T;
+        return std::bit_cast<T>( U( ~U( 0 ) ) );
+    }
+    /// all ones on the lanes of a STATIC set, zero elsewhere -- what a bitwise and keeps.
+    /// A bitwise and rather than a multiply by 0/1: the lanes outside the set may hold anything,
+    /// a NaN included, and `NaN * 0` is `NaN`.
+    template<LaneSet S,class T,int N>
+    struct LanePattern {
+        static constexpr std::array<T,N> make() {
+            std::array<T,N> r{};
+            for ( int i = 0; i < N; ++i ) r[ i ] = S().has( i ) ? all_ones_lane<T>() : T( 0 );
+            return r;
+        }
+        alignas( 64 ) static constexpr std::array<T,N> v = make();
+    };
+
+    template<LaneSet S,class T,int N,class Arch>
+    T sum_pruned( const S &s, const SimdVecImpl<T,N,Arch> &v ) {
+        using I = SimdVecImpl<T,N,Arch>;
+        if constexpr ( hull_covers<S,0,N> ) {
+            return horizontal_sum( v );
+        } else if constexpr ( HasSplit<I> ) {
+            constexpr int n0 = I::split_size_0;
+            if constexpr ( hull_disjoint<S,n0,N> ) {
+                return sum_pruned( s, v.data.split.v0 );
+            } else if constexpr ( hull_disjoint<S,0,n0> ) {
+                return sum_pruned( s.template shifted<n0>(), v.data.split.v1 );
+            } else {
+                if constexpr ( ! S::is_static && ( HasSplit<Half0<I>> || HasSplit<Half1<I>> ) ) {
+                    if ( s.empty( n0, N ) ) return sum_pruned( s, v.data.split.v0 );
+                    if ( s.empty( 0, n0 ) ) return sum_pruned( s.template shifted<n0>(), v.data.split.v1 );
+                }
+                return sum_pruned( s, v.data.split.v0 ) + sum_pruned( s.template shifted<n0>(), v.data.split.v1 );
+            }
+        } else if constexpr ( S::is_static ) {
+            // one register, partly wanted: keep the lanes of the set, reduce the whole
+            return horizontal_sum( anb( v, load_aligned( LanePattern<S,T,N>::v.data(), asimd::S<I>() ) ) );
+        } else {
+            T res = 0;
+            for ( int i = 0; i < N; ++i )
+                if ( s.has( i ) ) res += T( at( v, i ) );
+            return res;
+        }
+    }
+
+    template<LaneSet S,int N,int IS,class Arch>
+    PI64 to_bits_pruned( const S &s, const SimdBoolImpl<N,IS,Arch> &m ) {
+        using I = SimdBoolImpl<N,IS,Arch>;
+        if constexpr ( HasSplit<I> ) {
+            constexpr int n0 = I::split_size_0;
+            if constexpr ( hull_disjoint<S,n0,N> ) {
+                return to_bits_pruned( s, m.data.split.v0 );
+            } else if constexpr ( hull_disjoint<S,0,n0> ) {
+                return to_bits_pruned( s.template shifted<n0>(), m.data.split.v1 ) << n0;
+            } else {
+                if constexpr ( ! S::is_static && ( HasSplit<Half0<I>> || HasSplit<Half1<I>> ) ) {
+                    if ( s.empty( n0, N ) ) return to_bits_pruned( s, m.data.split.v0 );
+                    if ( s.empty( 0, n0 ) ) return to_bits_pruned( s.template shifted<n0>(), m.data.split.v1 ) << n0;
+                }
+                return sel::call<ops::to_bits,Key<void,N,Arch,IS>>( m ) & s.bits( N );
+            }
+        } else {
+            return sel::call<ops::to_bits,Key<void,N,Arch,IS>>( m ) & s.bits( N );
+        }
+    }
+}
+
+template<class T,int W,class Arch>
+T sum( const SimdVec<T,W,Arch> &v ) { return internal::horizontal_sum( v.impl ); }
+
+template<class T,int W,class Arch,LaneSet S>
+T sum( const SimdVec<T,W,Arch> &v, const S &s ) { return internal::sum_pruned( s, v.impl ); }
+
+template<int W,int IS,class Arch,LaneSet S>
+PI64 to_bits( const SimdBool<W,IS,Arch> &m, const S &s ) { return internal::to_bits_pruned( s, m.impl ); }
+
+template<int W,int IS,class Arch,LaneSet S>
+bool any( const SimdBool<W,IS,Arch> &m, const S &s ) { return internal::to_bits_pruned( s, m.impl ) != 0; }
+
+template<int W,int IS,class Arch,LaneSet S>
+bool all( const SimdBool<W,IS,Arch> &m, const S &s ) { return internal::to_bits_pruned( s, m.impl ) == s.bits( W ); }
+
+#define ASIMD_LANEWISE_LAZY_REDUCE( NAME, TAG ) \
+    template<class T,int W,class Arch,LaneSet S> \
+    PI64 to_bits( const internal::Op_##NAME<T,W,Arch> &op, const S &s ) { \
+        return internal::to_bits_pruned( s, internal::prune( s, internal::LaneWise<ops::TAG,T,Arch>(), op.a, op.b ) ); \
+    } \
+    template<class T,int W,class Arch,LaneSet S> \
+    bool any( const internal::Op_##NAME<T,W,Arch> &op, const S &s ) { return to_bits( op, s ) != 0; } \
+    template<class T,int W,class Arch,LaneSet S> \
+    bool all( const internal::Op_##NAME<T,W,Arch> &op, const S &s ) { return to_bits( op, s ) == s.bits( W ); }
+ASIMD_LANEWISE_LAZY_REDUCE( gt, cmp_gt )
+ASIMD_LANEWISE_LAZY_REDUCE( lt, cmp_lt )
+#undef ASIMD_LANEWISE_LAZY_REDUCE
 
 /// COMPARISONS ARE LAZY IN ASIMD: `a > b` computes nothing, it returns an object holding both
 /// operands, and the caller decides in which form to materialize it. The named forms below

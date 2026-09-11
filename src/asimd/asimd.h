@@ -15,8 +15,11 @@
 //
 //   architectures  `NativeCpu` (the compile-time target), `LargestCpu`, `X86Cpu<...>`,
 //                  `ArmCpu<...>`, `ScalarCpu`, `CudaGpu<...>` and their feature tags
-//   vectors        `SimdVec<T,size,Arch>`, `SimdBool<N,item_size,Arch>` (one boolean per lane), `SimdSize<T,Arch>`, `MaxSimdSize`,
-//                  `NbSimdRegisters`, `SimdAlig`
+//   vectors        `SimdVec<T,size,Arch>`, `SimdBool<N,item_size,Arch>` (one boolean per lane),
+//                  `SimdSize<T,Arch>`, `MaxSimdSize`, `NbSimdRegisters`, `SimdAlig`
+//   lane sets      `LaneRange<beg,end>`, `LaneMask<beg,end>` -- "the lanes I will read", as a
+//                  trailing argument: `add( a, b, LaneRange<0,3>() )` skips the registers that
+//                  hold none of them
 //   operations     `fma`, `to_bits`, `mask_from_bits`, `select`, `permute`, `bcast_lane`,
 //                  `rotate_lanes`, `ext_lanes`, the lazy comparisons (`a > b`, `eq`, `ge`) with
 //                  `any`/`all`, `V::iota`, and the arithmetic operators
@@ -46,6 +49,7 @@
 #include "detail/NbSimdRegisters.h"
 #include "detail/SimdAlig.h"
 #include "detail/SimdBool.h"
+#include "detail/LaneSet.h"
 #include "detail/SimdVec.h"
 #include "detail/Selection.h"
 #include "detail/SimdOps.h"

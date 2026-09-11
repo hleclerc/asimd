@@ -48,6 +48,7 @@ V u = asimd::select( asimd::mask_from_bits<8>( 1u << k ), a, b );
 | `bcast_lane<i>(v)` | broadcast a compile-time lane |
 | `rotate_lanes(v,k,n)` | lanes `[0,n)` rotated by `k`, the rest untouched; `k` and `n` each an `int` or an `N<>`. Both constant: one `EXT` / `shufps` / `vpermq` (an immediate) or `TBL` / `vpermps` (a constant), two across a split. Otherwise a `permute` on `iota + k`. Also `v.rotate_lanes(k,n)` |
 | `ext_lanes(a,b,N<K>)` | `a[K..N) ++ b[0..K)` — `EXT`, `palignr`, `valignd`: what a rotation is made of, and a sliding window over two consecutive vectors |
+| `add(a,b,LaneRange<0,3>())` | **a lane set**: "I will only read these lanes". Lanes outside are *unspecified* — which is what lets a register that holds none of them be skipped. `add` `sub` `mul` `div` `min` `max` `fma` `select` and the comparisons take one; `sum` `to_bits` `any` `all` *exclude* the other lanes. `LaneRange<beg,end>` with either bound static or dynamic (`LaneRange<0>( n )`), or `LaneMask<beg,end>( bits )` — dynamic bits inside a static hull. Static bounds prune at compile time, recursively; dynamic ones behind a branch, and only where the alternative is several registers or a lane loop |
 | `gt` `lt` `eq` `ge` | comparisons, materialized as a mask |
 | `-` `*` `/` `&` | the operators |
 | `<<` | a **per-lane** shift, each lane by its own amount — one instruction on ARM at every width, and none on x86 below AVX2 |

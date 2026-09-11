@@ -54,7 +54,7 @@ end
 -- generic forms -- and its grid runs on `NativeCpu`, i.e. on NEON. The same holds the other way:
 -- `test_arm_ops.cpp` on an x86 host exercises `ArmCpu<64,NEON,FMA>` with nothing registered
 -- under it. Each file is a value test everywhere and a backend test on its own target.
-for _, name in ipairs( { "test_ops", "test_split", "test_selection", "test_rotate",
+for _, name in ipairs( { "test_ops", "test_split", "test_selection", "test_rotate", "test_lanes",
                          "test_x86_ops", "test_x86_dispatch",
                          "test_arm_ops", "test_arm_dispatch" } ) do
     target( name )

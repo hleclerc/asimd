@@ -5,6 +5,7 @@
 #include "impl/SimdVecImpl_Arm.h" // IWYU pragma: export
 
 #include "SimdBool.h"
+#include "LaneSet.h"
 #include "SimdSize.h"
 #include "Ptr.h"   // the `load( P )` / `store( P )` overloads below are written against it
 
@@ -21,6 +22,16 @@ template<int n,class T,int W,class Arch>       SimdVec<T,W,Arch> rotate_lanes( c
 template<class T,int W,class Arch>             SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, int k, int n );
 template<class T,int W,class Arch>             SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, int k );
 template<int k,class T,int W,class Arch>       SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, N<k>, int n );
+
+// The arithmetic with a lane set (`LaneSet.h`), likewise.
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> add( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> sub( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> mul( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> div( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> min( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> max( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const S &s );
+template<class T,int W,class Arch,LaneSet S>   SimdVec<T,W,Arch> fma( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, const SimdVec<T,W,Arch> &c, const S &s );
+template<class T,int W,class Arch,LaneSet S>   T                 sum( const SimdVec<T,W,Arch> &v, const S &s );
 
 /**
   Simd vector.
@@ -131,6 +142,16 @@ struct SimdVec {
     HaD SimdVec&                                 operator/=            ( const auto &that ) { *this = *this / that; return *this; }
 
     HaD T                                        sum                   () const { return internal::horizontal_sum( impl ); }
+
+    // the arithmetic restricted to a lane set -- see `LaneSet.h`. Lanes outside are unspecified.
+    template<LaneSet S> HaD SimdVec              add                   ( const SimdVec &b, const S &s ) const { return asimd::add( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              sub                   ( const SimdVec &b, const S &s ) const { return asimd::sub( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              mul                   ( const SimdVec &b, const S &s ) const { return asimd::mul( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              div                   ( const SimdVec &b, const S &s ) const { return asimd::div( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              min                   ( const SimdVec &b, const S &s ) const { return asimd::min( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              max                   ( const SimdVec &b, const S &s ) const { return asimd::max( *this, b, s ); }
+    template<LaneSet S> HaD SimdVec              fma                   ( const SimdVec &b, const SimdVec &c, const S &s ) const { return asimd::fma( *this, b, c, s ); }
+    template<LaneSet S> HaD T                    sum                   ( const S &s ) const { return asimd::sum( *this, s ); }
 
     // lane rotations -- see `SimdOps.h`. `k` and `n` are each an `int` or an `N<>`.
     template<class K,class NN> HaD SimdVec       rotate_lanes          ( K k, NN n ) const { return asimd::rotate_lanes( *this, k, n ); }
