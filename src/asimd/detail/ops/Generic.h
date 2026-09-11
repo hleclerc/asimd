@@ -104,16 +104,26 @@ struct sel::Variant<ops::ext_lanes<K>,Key<T,N,Arch>,sel::GENERIC> {
 /// branch, since the alternative at the register is a lane loop, not an instruction. On one
 /// register: the plain load when the set is known to cover it, lane by lane otherwise. The lane
 /// loop is what makes the contract hold everywhere: it reads exactly the lanes of the set.
+#if defined( __GNUC__ ) && ! defined( __clang__ )
+// The lane loop below writes only the lanes of the set into `values`, which on a register impl
+// is a `vector_size` type -- each write is a read-modify-write of the whole vector, and gcc
+// reports the first one as a use of an uninitialized value. It is one, by contract. The
+// alternative, `V res{}`, is not free here: gcc then builds the vector through general
+// registers (`bfi`) instead of lane loads.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
 template<class T,int N,class Arch>
 struct sel::Variant<ops::load_partial,Key<T,N,Arch>,sel::GENERIC> {
     static constexpr bool available = true;
     using V = internal::SimdVecImpl<T,N,Arch>;
     template<LaneSet S>
     static V run( const T *ptr, const S &set ) {
-        V res;
         if constexpr ( internal::hull_covers<S,0,N> ) {
-            res = internal::load_unaligned( ptr, asimd::S<V>() );
+            return internal::load_unaligned( ptr, asimd::S<V>() );
         } else if constexpr ( internal::HasSplit<V> ) {
+            // a half the set does not reach is left at zero -- see `prune` in LaneSet.h
+            V res{};
             constexpr int n0 = V::split_size_0;
             const auto lo = [ & ] { res.data.split.v0 = sel::call<ops::load_partial,Key<T,n0,Arch>>( ptr, set ); };
             const auto hi = [ & ] { res.data.split.v1 = sel::call<ops::load_partial,Key<T,N - n0,Arch>>( ptr + n0, set.template shifted<n0>() ); };
@@ -124,13 +134,26 @@ struct sel::Variant<ops::load_partial,Key<T,N,Arch>,sel::GENERIC> {
                 if ( ! set.empty( 0, n0 ) ) lo();
                 if ( ! set.empty( n0, N ) ) hi();
             }
-        } else {
+            return res;
+        } else if constexpr ( S::is_static ) {
+            V res;
             for ( int i = 0; i < N; ++i )
                 if ( set.has( i ) ) res.data.values[ i ] = ptr[ i ];
+            return res;
+        } else {
+            // zeroed: with a dynamic set nothing proves any lane is written, and gcc would
+            // report the copy out of here, in the caller, past any pragma. The zero is a
+            // `movi` in front of a branchy lane loop, where it does not show.
+            V res{};
+            for ( int i = 0; i < N; ++i )
+                if ( set.has( i ) ) res.data.values[ i ] = ptr[ i ];
+            return res;
         }
-        return res;
     }
 };
+#if defined( __GNUC__ ) && ! defined( __clang__ )
+#pragma GCC diagnostic pop
+#endif
 
 template<class T,int N,class Arch>
 struct sel::Variant<ops::store_partial,Key<T,N,Arch>,sel::GENERIC> {

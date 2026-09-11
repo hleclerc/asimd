@@ -8,9 +8,10 @@
 // trailing argument (`add( a, b, LaneRange<0,3>() )`), says so.
 //
 // THE CONTRACT IS "DON'T CARE", NOT "MERGE". Lanes outside the set hold an UNSPECIFIED value in
-// the result -- typically whatever was in the register or on the stack before. That is the
-// whole point: it is what allows a half to be skipped rather than computed and blended. For
-// "keep the other lanes" there is `select`, which costs a blend and saves nothing.
+// the result. That is the whole point: it is what allows a half to be skipped rather than
+// computed and blended. For "keep the other lanes" there is `select`, which costs a blend and
+// saves nothing. (In practice a skipped register is zeroed -- see `prune` for why that is the
+// cheapest honest value -- but nothing may rely on it.)
 //
 // Because outside lanes are unspecified, every strategy is correct, including computing all of
 // them. So the library is free to choose, and it chooses:
@@ -237,10 +238,19 @@ auto prune( const S &set, const F &f, const A &...a ) {
     using R = std::invoke_result_t<F,const A&...>;
     if constexpr ( splits_alike<F,R,A...>() && ! hull_covers<S,0,width_of<R>> ) {
         constexpr int n0 = R::split_size_0, N = n0 + R::split_size_1;
+        // THE SKIPPED HALF IS ZEROED. The contract says "unspecified", and zero is the cheapest
+        // way to honour it without ever copying an indeterminate value: a constant, with no
+        // input, that the compiler hoists out of a loop and shares between every pruned
+        // operation in it -- and a zero idiom on x86, which costs no execution at all. A copy of
+        // an operand's half would be as cheap on one call and could never be hoisted; leaving
+        // the half unwritten makes gcc report "may be used uninitialized" at every later copy
+        // of the whole vector, in the caller's code.
         R res;
         if constexpr ( hull_disjoint<S,n0,N> ) {
             res.data.split.v0 = prune( set, f, a.data.split.v0... );
+            res.data.split.v1 = Half1<R>{};
         } else if constexpr ( hull_disjoint<S,0,n0> ) {
+            res.data.split.v0 = Half0<R>{};
             res.data.split.v1 = prune( set.template shifted<n0>(), f, a.data.split.v1... );
         } else {
             // both halves may be wanted. A dynamic set gets a BRANCH here, but only in front of
@@ -248,8 +258,8 @@ auto prune( const S &set, const F &f, const A &...a ) {
             // which are what a split half looks like. In front of a single instruction the
             // branch would cost what it saves, so the half is computed.
             if constexpr ( ! S::is_static && ( HasSplit<Half0<R>> || HasSplit<Half1<R>> ) ) {
-                if ( set.empty( n0, N ) ) { res.data.split.v0 = prune( set, f, a.data.split.v0... ); return res; }
-                if ( set.empty( 0, n0 ) ) { res.data.split.v1 = prune( set.template shifted<n0>(), f, a.data.split.v1... ); return res; }
+                if ( set.empty( n0, N ) ) { res.data.split.v0 = prune( set, f, a.data.split.v0... ); res.data.split.v1 = Half1<R>{}; return res; }
+                if ( set.empty( 0, n0 ) ) { res.data.split.v0 = Half0<R>{}; res.data.split.v1 = prune( set.template shifted<n0>(), f, a.data.split.v1... ); return res; }
             }
             // ... and each half gets the set seen from its own lane 0, so that the pruning goes
             // on below: `[0,9)` on four registers is two of them, then one, not four.
