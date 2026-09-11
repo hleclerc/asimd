@@ -1,4 +1,4 @@
-/* THE OTHER HALF OF THE LATTICE: the intrinsics `SimdVecImpl_Neon.h` and `SimdOpsPlus_Neon.h`
+/* THE OTHER HALF OF THE LATTICE: the intrinsics `SimdVecImpl_Neon.h` and `ops/Neon.h`
  * register under `features::ASIMD`, i.e. the ones that are A64-only.
  *
  * THIS FILE IS EXPECTED TO FAIL on an ARMv7 target, and that is the assertion. A negative check

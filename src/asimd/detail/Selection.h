@@ -61,7 +61,7 @@
 //       inventing 19 and 21 turns a readable scale into a pecking order;
 //     - make the constraints MUTUALLY EXCLUSIVE, `Has<SSSE3> && ! Has<AVX>`, which states the
 //       real relationship: the older form is the fallback, not a rival.
-//   The second is what this codebase does. `ASIMD_X86_REQ_EXCL` in `SimdOpsPlus_X86.h` spells it.
+//   The second is what this codebase does. `ASIMD_OPS_REQ_EXCL` in `ops/Shapes.h` spells it.
 // =====================================================================================
 
 namespace asimd {
@@ -96,7 +96,7 @@ struct Variant { static constexpr bool available = false; };
 /// initialized -- can land before the definition it requires, once the chain gets deep enough.
 ///
 /// And the chain does get deep, by design: a rank's `available` may ask what rank the HALVES
-/// reached (`SimdOpsPlus_Split.h`), which re-enters `rank`, which re-enters the search, at a
+/// reached (`ops/Split.h`), which re-enters `rank`, which re-enters the search, at a
 /// smaller width. That recursion is the point of the split ranks; it is not going away.
 ///
 /// A CLASS TEMPLATE HAS NO SUCH QUESTION. Its specializations are instantiated on demand, at the

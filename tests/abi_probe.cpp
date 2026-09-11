@@ -58,7 +58,7 @@ extern "C" IN probe_nat_add    ( IN a, IN b )       { return a + b; }
 // union takes the worst class among its members, and the whole mask went to memory.
 //
 // DEDUCED FROM `gt`, NOT WRITTEN OUT, and for the same reason the widths above are `SimdSize<T>`
-// rather than a number. Spelling it `SimdMask<NF,32>` asks for a LANE mask at the native width,
+// rather than a number. Spelling it `SimdBool<NF,32>` asks for a LANE mask at the native width,
 // and on AVX-512 that is sixteen 32-bit lanes -- 64 bytes, a flavour that target never produces
 // (its comparisons return `k` registers) and for which there is therefore no register impl. The
 // probe then failed on a configuration nothing in the library would ever construct.
@@ -89,5 +89,5 @@ using I8 = asimd::SimdVec<asimd::SI32,8>;
 extern "C" V8 probe_fma    ( V8 a, V8 b, V8 c ) { return asimd::fma( a, b, c ); }
 extern "C" D8 probe_fma_f64( D8 a, D8 b, D8 c ) { return asimd::fma( a, b, c ); }
 extern "C" V8 probe_perm   ( V8 a, I8 i )       { return asimd::permute( a, i ); }
-extern "C" V8 probe_sel_lane( asimd::SimdMask<8,32> m, V8 a, V8 b ) { return asimd::select( m, a, b ); }
-extern "C" V8 probe_sel_bits( asimd::SimdMask<8, 1> m, V8 a, V8 b ) { return asimd::select( m, a, b ); }
+extern "C" V8 probe_sel_lane( asimd::SimdBool<8,32> m, V8 a, V8 b ) { return asimd::select( m, a, b ); }
+extern "C" V8 probe_sel_bits( asimd::SimdBool<8, 1> m, V8 a, V8 b ) { return asimd::select( m, a, b ); }

@@ -54,7 +54,7 @@ end
 -- generic forms -- and its grid runs on `NativeCpu`, i.e. on NEON. The same holds the other way:
 -- `test_arm_ops.cpp` on an x86 host exercises `ArmCpu<64,NEON,FMA>` with nothing registered
 -- under it. Each file is a value test everywhere and a backend test on its own target.
-for _, name in ipairs( { "test_ops", "test_split", "test_selection",
+for _, name in ipairs( { "test_ops", "test_split", "test_selection", "test_rotate",
                          "test_x86_ops", "test_x86_dispatch",
                          "test_arm_ops", "test_arm_dispatch" } ) do
     target( name )
@@ -174,7 +174,7 @@ target( "abi_probe" )
             if n_stack > 0 then
                 raise( sym .. ": this value is passed through MEMORY, and at this width it fits "
                     .. "in ONE register -- so this is a layout regression, not the ABI. Either "
-                    .. "the union in SIMD_VEC_IMPL_REG / SIMD_MASK_IMPL_REG_LARGE has grown an "
+                    .. "the union in SIMD_VEC_IMPL_REG / SIMD_BOOL_IMPL_REG_LARGE has grown an "
                     .. "array or a Split again (README, section 3), or the operation lost its "
                     .. "register variant and fell back to the generic lane loop (FINDINGS.md, "
                     .. "section 3)." )

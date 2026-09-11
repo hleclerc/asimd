@@ -11,7 +11,7 @@ namespace features {
 ///
 /// Sharing it is not a compromise, it is the accurate statement. `Has<FMA>` means "this target
 /// can fuse", nothing more; WHICH instruction that is falls out of the width feature it is
-/// conjoined with (`ASIMD_PLUS_FMA( SSE2, FMA, ... )` is `vfmadd`, `ASIMD_PLUS_FMA( NEON, FMA,
+/// conjoined with (`ASIMD_OPS_FMA( SSE2, FMA, ... )` is `vfmadd`, `ASIMD_OPS_FMA( NEON, FMA,
 /// ... )` is `fmla`). It is its own feature on both architectures for the same reason: FMA is
 /// orthogonal to the vector width on x86 -- there were AMD parts with one and not the other --
 /// and on ARM it is architectural at A64 but needs VFPv4 on ARMv7.

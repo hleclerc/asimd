@@ -2,7 +2,7 @@
 // `test_ops.cpp` happens to use.
 //
 // `test_selection.cpp` checks that nothing silently drops to the generic form, and it checks it
-// for `Key<float,8,NativeCpu>`. That is exactly the cell `SimdOpsPlus_X86.h` implements, so the
+// for `Key<float,8,NativeCpu>`. That is exactly the cell `ops/X86.h` implements, so the
 // safety net can only ever say yes. This file asks the same question at every width and every
 // type, and in particular AT THE NATIVE WIDTH -- the width `SimdVec<T>` picks when you do not
 // name one, which on an AVX-512 machine is 16 floats, not 8.
@@ -42,6 +42,19 @@ static void row( const char *name ) {
     printf( "\n" );
 }
 
+/// the same row for an operation whose tag depends on the width -- `rotate_lanes<1,N>`.
+template<template<int> class OpOfN>
+static void row_n( const char *name ) {
+    printf( "  %-16s", name );
+    cell<OpOfN<4>,float ,4>(); cell<OpOfN<8>,float ,8>(); cell<OpOfN<16>,float ,16>();
+    cell<OpOfN<2>,double,2>(); cell<OpOfN<4>,double,4>(); cell<OpOfN< 8>,double, 8>();
+    cell<OpOfN<4>,SI32  ,4>(); cell<OpOfN<8>,SI32  ,8>(); cell<OpOfN<16>,SI32  ,16>();
+    printf( "\n" );
+}
+template<int N> using rotate_whole  = ops::rotate_lanes<1,N>;   ///< the whole register by one
+template<int N> using rotate_prefix = ops::rotate_lanes<1,2>;   ///< the first two lanes only
+template<int N> using ext_by_one    = ops::ext_lanes<1>;
+
 /// the rank at the width `SimdVec<T>` picks on its own.
 template<class Op,class T>
 static int rank_at_native_width() { return sel::rank<Op,Key<T,SimdSize<T,A>::value,A>>; }
@@ -64,6 +77,21 @@ static void require_the_floor() {
         sel::require_at_least<ops::cmp_eq,Key<SI32 ,4,A>,sel::REGISTER>();
         sel::require_at_least<ops::to_bits,Key<void,4,A,32>,sel::REGISTER>();
         sel::require_at_least<ops::bcast_lane<1>,Key<float,4,A>,sel::REGISTER>();
+        // any rotation of four 32-bit lanes, whole or prefix, is one `shufps` / `pshufd`; the
+        // two-source form is `palignr` from SSSE3 and two byte shifts below it.
+        sel::require_at_least<ops::rotate_lanes<1,4>,Key<float ,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,3>,Key<float ,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<2,4>,Key<SI32  ,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<double,2,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<SI64  ,2,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<float ,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<double,2,A>,sel::REGISTER>();
+    }
+    if constexpr ( A::template Has<features::SSE2>::value && ! A::template Has<features::AVX>::value ) {
+        // eight floats are two `xmm`: a rotation across them is two `palignr` with crossed operands
+        sel::require_at_least<ops::rotate_lanes<1,8>,Key<float,8,A>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<1,3>,Key<float,8,A>,sel::SPLIT>();
+        sel::require_at_least<ops::ext_lanes<5>,Key<float,8,A>,sel::SPLIT>();
     }
     if constexpr ( A::template Has<features::SSE4_1>::value )
         sel::require_at_least<ops::select,Key<float,4,A,32>,sel::REGISTER>();
@@ -73,10 +101,50 @@ static void require_the_floor() {
         sel::require_at_least<ops::select,Key<float ,8,A,32>,sel::REGISTER>();
         sel::require_at_least<ops::permute,Key<float,4,A>,sel::REGISTER>();
     }
+    if constexpr ( A::template Has<features::AVX>::value && ! A::template Has<features::AVX2>::value ) {
+        // one `ymm` and no `vpalignr` for it: `vperm2f128` and `vshufps` do the rotation, and
+        // must, since a single register has no split to fall back on.
+        sel::require_at_least<ops::rotate_lanes<1,8>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<3,8>,Key<SI32  ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,3>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,4>,Key<double,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<double,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<3>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<double,4,A>,sel::REGISTER>();
+    }
     if constexpr ( A::template Has<features::AVX2>::value ) {
         sel::require_at_least<ops::permute,Key<float,8,A>,sel::REGISTER>();
         sel::require_at_least<ops::cmp_gt,Key<SI32,8,A>,sel::REGISTER>();
         sel::require_at_least<ops::bcast_lane<1>,Key<float,8,A>,sel::REGISTER>();
+        // `vpermps` with a constant, `vpermq` with an immediate; `vperm2i128 + vpalignr` for
+        // the two-source form.
+        sel::require_at_least<ops::rotate_lanes<1,8>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,5>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<3,4>,Key<double,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,3>,Key<SI64  ,4,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<5>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<4>,Key<float ,8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<3>,Key<double,4,A>,sel::REGISTER>();
+    }
+    if constexpr ( A::template Has<features::AVX2>::value && ! A::template Has<features::AVX512>::value ) {
+        sel::require_at_least<ops::rotate_lanes<1,16>,Key<float,16,A>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<9,16>,Key<float,16,A>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<1, 8>,Key<double,8,A>,sel::SPLIT>();
+    }
+    if constexpr ( A::template Has<features::AVX512>::value ) {
+        // `valignd` / `valignq` for the whole register, `vpermps` / `vpermpd` for a prefix.
+        sel::require_at_least<ops::rotate_lanes<1,16>,Key<float ,16,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1, 5>,Key<float ,16,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1, 8>,Key<double, 8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1, 3>,Key<SI64  , 8,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<7>,Key<float ,16,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<double, 8,A>,sel::REGISTER>();
+    }
+    if constexpr ( A::template Has<features::AVX512BW>::value ) {
+        sel::require_at_least<ops::rotate_lanes<1,32>,Key<SI16,32,A>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1, 7>,Key<PI16,32,A>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<3>,Key<SI16,32,A>,sel::REGISTER>();
     }
     // `Has<FMA>` ALONE IS NOT AN x86 TEST, and this block used to be written as though it were.
     // `features::FMA` is shared with ARM -- it says the target can fuse, not which instruction
@@ -162,6 +230,9 @@ int main() {
     row<ops::cmp_lt>        ( "cmp_lt"        );
     row<ops::cmp_eq>        ( "cmp_eq"        );
     row<ops::cmp_ge>        ( "cmp_ge"        );
+    row_n<rotate_whole>     ( "rotate<1,N>"   );
+    row_n<rotate_prefix>    ( "rotate<1,2>"   );
+    row_n<ext_by_one>       ( "ext<1>"        );
     printf( "  (0 = GENERIC, a scalar loop; %d = SPLIT; %d = REGISTER; %d = MASK_REGISTER)\n\n",
             sel::SPLIT, sel::REGISTER, sel::MASK_REGISTER );
 

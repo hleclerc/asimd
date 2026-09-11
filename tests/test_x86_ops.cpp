@@ -55,7 +55,7 @@ static void grid( const char *label ) {
     CHECK_AT( label, to_bits( a > b ) == e_gt );
     CHECK_AT( label, to_bits( a < b ) == e_lt );
 
-    // ---- ... and `any`/`all` ON A LAZY COMPARISON go through a THIRD one: `as_a_simd_mask`,
+    // ---- ... and `any`/`all` ON A LAZY COMPARISON go through a THIRD one: `as_a_simd_bool`,
     // where `to_bits( a > b )` and `select( a > b, ... )` both route through `ops::cmp_gt` and
     // never touch it. Which is how its split branch stayed broken -- it assumed both halves
     // returned the BIT flavour of mask, so at 16 lanes with a register form at 8 (i.e. `-mavx`

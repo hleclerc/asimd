@@ -46,6 +46,8 @@ V u = asimd::select( asimd::mask_from_bits<8>( 1u << k ), a, b );
 | `select(m,a,b)` | blend two vectors according to a mask |
 | `permute(v,idx)` | **variable-index** permutation |
 | `bcast_lane<i>(v)` | broadcast a compile-time lane |
+| `rotate_lanes(v,k,n)` | lanes `[0,n)` rotated by `k`, the rest untouched; `k` and `n` each an `int` or an `N<>`. Both constant: one `EXT` / `shufps` / `vpermq` (an immediate) or `TBL` / `vpermps` (a constant), two across a split. Otherwise a `permute` on `iota + k`. Also `v.rotate_lanes(k,n)` |
+| `ext_lanes(a,b,N<K>)` | `a[K..N) ++ b[0..K)` — `EXT`, `palignr`, `valignd`: what a rotation is made of, and a sliding window over two consecutive vectors |
 | `gt` `lt` `eq` `ge` | comparisons, materialized as a mask |
 | `-` `*` `/` `&` | the operators |
 | `<<` | a **per-lane** shift, each lane by its own amount — one instruction on ARM at every width, and none on x86 below AVX2 |
@@ -112,7 +114,7 @@ So in `SIMD_VEC_IMPL_REG`: `values` typed with `vector_size` (which keeps `value
 consecutive `vpinsrd` rather than a constant load.
 
 Two things the audit added to this section. First, the same rule applies to **masks**, and had not
-been applied: `SIMD_MASK_IMPL_REG_LARGE` still held `PI32 values[8]` *and* a `Split`, so every
+been applied: `SIMD_BOOL_IMPL_REG_LARGE` still held `PI32 values[8]` *and* a `Split`, so every
 lane-flavoured mask crossing a call went through memory — 9 instructions and 3 stack accesses on a
 by-value `select`, against 4 and 0 once fixed. The rule is now in one place,
 `support/VecValues.h`, which both macros use and which carries the MSVC fallback (MSVC has no
@@ -131,9 +133,9 @@ for it.
 ## 4. ARM
 
 Two backends now, and the second one is not a transcription of the first. `architectures/ArmCpu.h`
-and `ArmCpuFeatures.h` declare the target, `impl/SimdVecImpl_Neon.h` and `SimdMaskImpl_Neon.h`
-carry the vectors and the masks, `SimdOpsPlus_Neon.h` the operations of § 1. The variant *shapes*
-moved to `SimdOpsPlus_Shapes.h`, shared with x86: what a variant of `select` looks like is a
+and `ArmCpuFeatures.h` declare the target, `impl/SimdVecImpl_Neon.h` and `SimdBoolImpl_Neon.h`
+carry the vectors and the masks, `ops/Neon.h` the operations of § 1. The variant *shapes*
+moved to `ops/Shapes.h`, shared with x86: what a variant of `select` looks like is a
 property of `Selection.h`, not of an instruction set, so a backend is now a **table** and nothing
 else.
 
@@ -392,7 +394,7 @@ Every probe in the enforced set is written at `SimdSize<T>` and its mask flavour
 what `gt` returns on the target — four lanes and a `__m128i` under SSE2, eight and a `__m256i`
 under AVX2, sixteen and a `__mmask16` under AVX-512, four and a `uint32x4_t` on ARM. Nothing in it
 names a width or a flavour, so it is one register everywhere by construction rather than by luck.
-That is the § 4 lesson: spelling `SimdMask<16,32>` asked AVX-512 for a 64-byte *lane* mask, a
+That is the § 4 lesson: spelling `SimdBool<16,32>` asked AVX-512 for a 64-byte *lane* mask, a
 flavour it never produces.
 
 The ARM port also made the check **portable**, which it was not: the stack pointer is `sp` and not
@@ -429,7 +431,7 @@ Five bugs, none of them ARM's, and each found by a different mechanism — which
 a second backend that the performance numbers do not make:
 
 1. **`any( a > b )` did not compile at 16 lanes** on any target with a register form at 8 — i.e.
-   `-mavx` and up. The split branch of `NAME##_as_a_simd_mask` assumed both halves returned the
+   `-mavx` and up. The split branch of `NAME##_as_a_simd_bool` assumed both halves returned the
    *bit* flavour of mask, and a register form returns the *lane* flavour. It survived because
    nothing reached it: `to_bits( a > b )` and `select( a > b, … )` both route through
    `ops::cmp_gt`, and only `any`/`all` on a lazy comparison use that function. Found by writing

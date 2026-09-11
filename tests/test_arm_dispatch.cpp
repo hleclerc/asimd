@@ -47,6 +47,19 @@ static void row( const char *name ) {
     printf( "\n" );
 }
 
+/// the same row for an operation whose tag depends on the width -- `rotate_lanes<1,N>`.
+template<template<int> class OpOfN,class Arch>
+static void row_n( const char *name ) {
+    printf( "  %-16s", name );
+    cell<OpOfN<4>,float ,4,Arch>(); cell<OpOfN<8>,float ,8,Arch>(); cell<OpOfN<16>,float ,16,Arch>();
+    cell<OpOfN<2>,double,2,Arch>(); cell<OpOfN<4>,double,4,Arch>(); cell<OpOfN< 8>,double, 8,Arch>();
+    cell<OpOfN<4>,SI32  ,4,Arch>(); cell<OpOfN<8>,SI32  ,8,Arch>(); cell<OpOfN<16>,SI32  ,16,Arch>();
+    printf( "\n" );
+}
+template<int N> using rotate_whole  = ops::rotate_lanes<1,N>;   ///< the whole register by one
+template<int N> using rotate_prefix = ops::rotate_lanes<1,2>;   ///< the first two lanes only
+template<int N> using ext_by_one    = ops::ext_lanes<1>;
+
 /// THE RANK OF ONE CELL, THROUGH A FUNCTION TEMPLATE -- and that is not a stylistic choice.
 ///
 /// Naming `sel::rank<...>` DIRECTLY inside a non-template function is what this file did, and on
@@ -84,6 +97,9 @@ static void grid( const char *what ) {
     row<ops::cmp_lt,Arch>        ( "cmp_lt"        );
     row<ops::cmp_eq,Arch>        ( "cmp_eq"        );
     row<ops::cmp_ge,Arch>        ( "cmp_ge"        );
+    row_n<rotate_whole,Arch>     ( "rotate<1,N>"   );
+    row_n<rotate_prefix,Arch>    ( "rotate<1,2>"   );
+    row_n<ext_by_one,Arch>       ( "ext<1>"        );
     printf( "\n" );
 }
 
@@ -119,6 +135,16 @@ static void require_the_floor() {
         sel::require_at_least<ops::fma,Key<PI32,4,Arch>,sel::REGISTER>();
 
         sel::require_at_least<ops::mask_from_bits,Key<void,4,Arch>,sel::REGISTER>();
+
+        // `EXT` is ARMv7: a whole-register rotation, and the two-source form it is made of, at
+        // every lane width -- with no constant to load, which is what x86 gets only from AVX-512.
+        sel::require_at_least<ops::rotate_lanes<1,4>,Key<FP32,4,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<3,4>,Key<SI32,4,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<SI64,2,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<5,8>,Key<SI16,8,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<7,16>,Key<PI8,16,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<FP32,4,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<3>,Key<SI16,8,Arch>,sel::REGISTER>();
     }
 
     if constexpr ( Arch::template Has<features::NEON>::value && Arch::template Has<features::FMA>::value )
@@ -147,6 +173,14 @@ static void require_the_floor() {
         sel::require_at_least<ops::bcast_lane<1>,Key<FP32,4,Arch>,sel::REGISTER>();
         sel::require_at_least<ops::bcast_lane<3>,Key<SI32,4,Arch>,sel::REGISTER>();
         sel::require_at_least<ops::bcast_lane<1>,Key<FP64,2,Arch>,sel::REGISTER>();
+
+        // a rotation of a PREFIX of the register is a `TBL` with a constant table, A64 only;
+        // and `EXT` on double precision, since the lane type is.
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<FP32,4,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,3>,Key<SI32,4,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<2,5>,Key<SI16,8,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::rotate_lanes<1,2>,Key<FP64,2,Arch>,sel::REGISTER>();
+        sel::require_at_least<ops::ext_lanes<1>,Key<FP64,2,Arch>,sel::REGISTER>();
 
         // `to_bits` at all four lane widths. There is no `movemask` on ARM, so each of these is
         // an AND plus an `ADDV` -- and the 16-lane one reduces its halves separately, because
@@ -180,6 +214,15 @@ static void require_the_floor() {
         sel::require_at_least<ops::bcast_lane<5>,Key<FP32,8,Arch>,sel::SPLIT>();  // the UPPER half
         sel::require_at_least<ops::mask_from_bits,Key<void, 8,Arch>,sel::SPLIT>();
         sel::require_at_least<ops::mask_from_bits,Key<void,16,Arch>,sel::SPLIT>();
+        // a rotation of `float x 8` is two `EXT`s with crossed operands -- the case this
+        // architecture lives in, since eight floats are always two registers here.
+        sel::require_at_least<ops::rotate_lanes<1,8>,Key<FP32, 8,Arch>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<5,8>,Key<FP32, 8,Arch>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<3,16>,Key<FP32,16,Arch>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<1,4>,Key<FP64, 4,Arch>,sel::SPLIT>();
+        sel::require_at_least<ops::rotate_lanes<1,4>,Key<FP32, 8,Arch>,sel::SPLIT>();   // a prefix inside the first half
+        sel::require_at_least<ops::ext_lanes<3>,Key<FP32, 8,Arch>,sel::SPLIT>();
+        sel::require_at_least<ops::ext_lanes<9>,Key<FP32,16,Arch>,sel::SPLIT>();
     }
 }
 
@@ -204,7 +247,7 @@ int main() {
     // GUARDED ON WHETHER THE BACKEND EXISTS IN THIS TRANSLATION UNIT, not on whether the
     // architecture type claims the feature -- and the difference is the whole point of the
     // guard. `V7` is a TYPE: `ArmCpu<64,NEON,FMA>::Has<NEON>` is true on an x86 host too, while
-    // `SimdOpsPlus_Neon.h` is `#if`'d out there for want of `<arm_neon.h>`, so every assertion
+    // `ops/Neon.h` is `#if`'d out there for want of `<arm_neon.h>`, so every assertion
     // below would demand a register form that cannot exist and this file would not compile at
     // all off ARM.
     //

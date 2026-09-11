@@ -1,23 +1,22 @@
 #pragma once
 
 // =============================================================================================
-// THE SPLIT RANK, which was declared in `Selection.h` from the start and never used.
+// THE SPLIT RANK: a width above what the register holds, done as two operations on the halves.
 //
 // asimd's premise is that the width is the author's choice: `SimdVec<float,8>` must work on a
-// target whose registers hold four. The vector impls do that -- they split recursively, and the
-// arithmetic follows the split. The OPERATIONS ADDED BY `SimdOpsPlus.h` did not: their generic
-// forms walk `values` lane by lane, ignoring the split entirely.
+// target whose registers hold four. The vector impls split recursively and the arithmetic follows
+// the split; the operations of `SimdOps.h` follow it through this file, since their generic forms
+// walk `values` lane by lane and would ignore the split entirely.
 //
 // Measured, `to_bits( a > b )` on `float x 8` under SSE2:
 //
 //     written with plain gcc vector extensions      48 instructions
-//     asimd, generic forms                          73          <- worse than doing nothing
-//     asimd, with the split forms below              9
+//     generic forms                                 73          <- worse than doing nothing
+//     the split forms below                          9
 //
-// Being beaten by the compiler at the one thing the library exists for is the kind of result that
-// makes a library not worth its include. The fix is not per-type work: a split form is the same
-// three lines for every type and every width, because it delegates to whatever the halves resolve
-// to -- a register form, a mask register form, or another split.
+// It is not per-type work: a split form is the same three lines for every type and every width,
+// because it delegates to whatever the halves resolve to -- a register form, a mask register
+// form, or another split.
 //
 // `permute` is the awkward one, and it is included anyway. A permutation moves a lane from one
 // half to the OTHER, which is exactly what two half-registers cannot do directly -- so it costs
@@ -28,7 +27,7 @@
 // EVERY width -- an operation that opts out of the split mechanism is a hole in the premise.
 // =============================================================================================
 
-#include "Selection.h"
+#include "Key.h"
 
 namespace asimd {
 
@@ -46,7 +45,7 @@ struct SplitOf<T,N,Arch,true> {
 };
 
 /// idem for a mask.
-template<int N,int IS,class Arch,bool = requires ( SimdMaskImpl<N,IS,Arch> m ) { m.data.split.v0; }>
+template<int N,int IS,class Arch,bool = requires ( SimdBoolImpl<N,IS,Arch> m ) { m.data.split.v0; }>
 struct MaskSplits { static constexpr bool value = false; };
 template<int N,int IS,class Arch>
 struct MaskSplits<N,IS,Arch,true> { static constexpr bool value = true; };
@@ -95,7 +94,7 @@ using CmpResultOf = decltype( sel::call<Op,Key<T,N,Arch>>(
 // ---------------------------------------------------------------------------------------------
 // comparisons
 // ---------------------------------------------------------------------------------------------
-#define ASIMD_PLUS_SPLIT_CMP( TAG )                                                              \
+#define ASIMD_OPS_SPLIT_CMP( TAG )                                                              \
     template<class T,int N,class Arch>                                                           \
     struct sel::Variant<ops::TAG,Key<T,N,Arch>,sel::SPLIT> {                                     \
         using V = internal::SimdVecImpl<T,N,Arch>;                                               \
@@ -107,8 +106,8 @@ using CmpResultOf = decltype( sel::call<Op,Key<T,N,Arch>>(
         static constexpr bool available =                                                        \
             HalfIsWorthIt<ops::TAG,T,n0,Arch>::value && is0 != 0 && is0 == is1                   \
             && internal::MaskSplits<N,is0,Arch>::value;                                          \
-        static internal::SimdMaskImpl<N,is0,Arch> run( const V &a, const V &b ) {                \
-            internal::SimdMaskImpl<N,is0,Arch> res;                                              \
+        static internal::SimdBoolImpl<N,is0,Arch> run( const V &a, const V &b ) {                \
+            internal::SimdBoolImpl<N,is0,Arch> res;                                              \
             res.data.split.v0 = sel::call<ops::TAG,Key<T,n0,Arch>>( a.data.split.v0, b.data.split.v0 ); \
             res.data.split.v1 = sel::call<ops::TAG,Key<T,n1,Arch>>( a.data.split.v1, b.data.split.v1 ); \
             return res;                                                                          \
@@ -125,13 +124,13 @@ struct ItemSizeOf<Op,T,N,Arch,true> {
 
 #define ASIMD_ITEM_SIZE_OR_0( TAG, NN ) ItemSizeOf<ops::TAG,T,NN,Arch>::value
 
-ASIMD_PLUS_SPLIT_CMP( cmp_gt );
-ASIMD_PLUS_SPLIT_CMP( cmp_lt );
-ASIMD_PLUS_SPLIT_CMP( cmp_eq );
-ASIMD_PLUS_SPLIT_CMP( cmp_ge );
+ASIMD_OPS_SPLIT_CMP( cmp_gt );
+ASIMD_OPS_SPLIT_CMP( cmp_lt );
+ASIMD_OPS_SPLIT_CMP( cmp_eq );
+ASIMD_OPS_SPLIT_CMP( cmp_ge );
 
 #undef ASIMD_ITEM_SIZE_OR_0
-#undef ASIMD_PLUS_SPLIT_CMP
+#undef ASIMD_OPS_SPLIT_CMP
 
 // ---------------------------------------------------------------------------------------------
 // to_bits -- the one that was 73 instructions. Each half yields its own bits; shift and or.
@@ -143,12 +142,12 @@ struct MaskHalfWorthIt<N,IS,Arch,true> {
     static constexpr bool value = sel::rank<ops::to_bits,Key<void,N,Arch,IS>> > sel::GENERIC;
 };
 
-template<int N,int IS,class Arch,bool = requires ( internal::SimdMaskImpl<N,IS,Arch> m ) { m.data.split.v0; }>
+template<int N,int IS,class Arch,bool = requires ( internal::SimdBoolImpl<N,IS,Arch> m ) { m.data.split.v0; }>
 struct MaskSplitSizes { static constexpr int n0 = 0, n1 = 0; };
 template<int N,int IS,class Arch>
 struct MaskSplitSizes<N,IS,Arch,true> {
-    static constexpr int n0 = internal::SimdMaskImpl<N,IS,Arch>::split_size_0;
-    static constexpr int n1 = internal::SimdMaskImpl<N,IS,Arch>::split_size_1;
+    static constexpr int n0 = internal::SimdBoolImpl<N,IS,Arch>::split_size_0;
+    static constexpr int n1 = internal::SimdBoolImpl<N,IS,Arch>::split_size_1;
 };
 
 template<int N,class Arch,int IS>
@@ -156,14 +155,14 @@ struct sel::Variant<ops::to_bits,Key<void,N,Arch,IS>,sel::SPLIT> {
     static constexpr int n0 = MaskSplitSizes<N,IS,Arch>::n0;
     static constexpr int n1 = MaskSplitSizes<N,IS,Arch>::n1;
     static constexpr bool available = MaskHalfWorthIt<n0,IS,Arch>::value;
-    static PI64 run( const internal::SimdMaskImpl<N,IS,Arch> &m ) {
+    static PI64 run( const internal::SimdBoolImpl<N,IS,Arch> &m ) {
         return sel::call<ops::to_bits,Key<void,n0,Arch,IS>>( m.data.split.v0 )
              | ( sel::call<ops::to_bits,Key<void,n1,Arch,IS>>( m.data.split.v1 ) << n0 );
     }
 };
 
 // ---------------------------------------------------------------------------------------------
-// mask_from_bits -- the dual of `to_bits`, and it was missing.
+// mask_from_bits -- the dual of `to_bits`.
 //
 // WHY IT MATTERS MORE ON ARM THAN ON x86. `Key<void,N,Arch>` carries no item size, so ONE
 // registration per width decides which FLAVOUR of mask that width produces, and every later
@@ -230,8 +229,8 @@ template<int N,class Arch>
 struct sel::Variant<ops::mask_from_bits,Key<void,N,Arch>,sel::SPLIT> {
     using SP = MfbSplitOf<N,Arch>;
     static constexpr bool available = SP::ok;
-    static internal::SimdMaskImpl<N,SP::is,Arch> run( PI64 b ) {
-        internal::SimdMaskImpl<N,SP::is,Arch> res;
+    static internal::SimdBoolImpl<N,SP::is,Arch> run( PI64 b ) {
+        internal::SimdBoolImpl<N,SP::is,Arch> res;
         res.data.split.v0 = sel::call<ops::mask_from_bits,Key<void,SP::n0,Arch>>( b );
         res.data.split.v1 = sel::call<ops::mask_from_bits,Key<void,SP::n1,Arch>>( b >> SP::n0 );
         return res;
@@ -251,7 +250,7 @@ struct SelectHalfWorthIt<T,N,Arch,IS,true> {
 template<class T,int N,class Arch,int IS>
 struct sel::Variant<ops::select,Key<T,N,Arch,IS>,sel::SPLIT> {
     using V = internal::SimdVecImpl<T,N,Arch>;
-    using M = internal::SimdMaskImpl<N,IS,Arch>;
+    using M = internal::SimdBoolImpl<N,IS,Arch>;
     static constexpr int n0 = internal::SplitOf<T,N,Arch>::n0;
     static constexpr int n1 = internal::SplitOf<T,N,Arch>::n1;
     static constexpr bool available = SelectHalfWorthIt<T,n0,Arch,IS>::value
@@ -399,6 +398,103 @@ struct sel::Variant<ops::permute,Key<T,N,Arch>,sel::SPLIT> {
         V res;
         res.data.split.v0 = half( v.data.split.v0, v.data.split.v1, idx_half<0>( idx ) );
         res.data.split.v1 = half( v.data.split.v0, v.data.split.v1, idx_half<n0>( idx ) );
+        return res;
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// ext_lanes -- the concatenation `a:b` shifted by K lanes, across a split. With halves of equal
+// width `h`, the K lanes that cross the boundary do so one half at a time:
+//
+//     K < h :  r0 = ext<K>( a0, a1 )     r1 = ext<K>( a1, b0 )
+//     K = h :  r0 = a1                   r1 = b0                 -- a register rename, no work
+//     K > h :  r0 = ext<K-h>( a1, b0 )   r1 = ext<K-h>( b0, b1 )
+//
+// Two half-`EXT`s for the whole, which on a 128-bit-only architecture is the ordinary case: a
+// rotation of `float x 8` on NEON is two `EXT`, not a trip through memory.
+//
+// ONLY WHEN THE TWO HALVES HAVE THE SAME WIDTH, for the same reason as `permute` above.
+// ---------------------------------------------------------------------------------------------
+
+/// is `ext_lanes<K>` worth delegating to at width `h` -- reads as "yes" when K is 0, since
+/// that case is a copy and names no variant at all.
+template<int K,class T,int N,class Arch,bool = ( N > 0 && K > 0 )>
+struct ExtHalfWorthIt { static constexpr bool value = N > 0; };
+template<int K,class T,int N,class Arch>
+struct ExtHalfWorthIt<K,T,N,Arch,true> {
+    static constexpr bool value = sel::rank<ops::ext_lanes<K>,Key<T,N,Arch>> > sel::GENERIC;
+};
+
+template<int K,class T,int N,class Arch>
+struct sel::Variant<ops::ext_lanes<K>,Key<T,N,Arch>,sel::SPLIT> {
+    using V  = internal::SimdVecImpl<T,N,Arch>;
+    static constexpr int h  = internal::SplitOf<T,N,Arch>::n0;
+    static constexpr int n1 = internal::SplitOf<T,N,Arch>::n1;
+    static constexpr int k  = K < h ? K : K - h;   ///< the shift once rebased into a half
+    using Vh = internal::SimdVecImpl<T,h,Arch>;
+
+    static constexpr bool available = h > 0 && h == n1 && ExtHalfWorthIt<k,T,h,Arch>::value;
+
+    static Vh ext( const Vh &x, const Vh &y ) {
+        if constexpr ( k == 0 ) return x;
+        else return sel::call<ops::ext_lanes<k>,Key<T,h,Arch>>( x, y );
+    }
+
+    static V run( const V &a, const V &b ) {
+        V res;
+        if constexpr ( K < h ) {
+            res.data.split.v0 = ext( a.data.split.v0, a.data.split.v1 );
+            res.data.split.v1 = ext( a.data.split.v1, b.data.split.v0 );
+        } else {
+            res.data.split.v0 = ext( a.data.split.v1, b.data.split.v0 );
+            res.data.split.v1 = ext( b.data.split.v0, b.data.split.v1 );
+        }
+        return res;
+    }
+};
+
+// ---------------------------------------------------------------------------------------------
+// rotate_lanes, across a split. Two cases have a cheap answer:
+//
+//   the rotated prefix fits in the first half (`n <= n0`): rotate that half, copy the other.
+//   the whole width rotates (`n == N`, equal halves): `rotate<K>( v ) == ext<K>( v, v )`, i.e.
+//     the `ext_lanes` split above with `a = b = v`.
+//
+// A prefix that straddles the boundary without covering the whole (`n0 < n < N`) has no split
+// form and stays generic: it would take a permutation, and the generic form IS one.
+// ---------------------------------------------------------------------------------------------
+template<int K,int n,class T,int N,class Arch>
+struct sel::Variant<ops::rotate_lanes<K,n>,Key<T,N,Arch>,sel::SPLIT> {
+    using V  = internal::SimdVecImpl<T,N,Arch>;
+    static constexpr int n0 = internal::SplitOf<T,N,Arch>::n0;
+    static constexpr int n1 = internal::SplitOf<T,N,Arch>::n1;
+    static constexpr int k  = K < n0 ? K : K - n0;
+
+    static constexpr bool in_first_half = n0 > 0 && n <= n0;
+    static constexpr bool whole         = n0 > 0 && n == N && n0 == n1;
+
+    static constexpr bool available =
+        ( in_first_half && HalfIsWorthIt<ops::rotate_lanes<K,n>,T,n0,Arch>::value )
+        || ( whole && ExtHalfWorthIt<k,T,n0,Arch>::value );
+
+    using Vh = internal::SimdVecImpl<T,n0,Arch>;
+    static Vh ext( const Vh &x, const Vh &y ) {
+        if constexpr ( k == 0 ) return x;
+        else return sel::call<ops::ext_lanes<k>,Key<T,n0,Arch>>( x, y );
+    }
+
+    static V run( const V &v ) {
+        V res;
+        if constexpr ( in_first_half ) {
+            res.data.split.v0 = sel::call<ops::rotate_lanes<K,n>,Key<T,n0,Arch>>( v.data.split.v0 );
+            res.data.split.v1 = v.data.split.v1;
+        } else if constexpr ( K < n0 ) {
+            res.data.split.v0 = ext( v.data.split.v0, v.data.split.v1 );
+            res.data.split.v1 = ext( v.data.split.v1, v.data.split.v0 );
+        } else {
+            res.data.split.v0 = ext( v.data.split.v1, v.data.split.v0 );
+            res.data.split.v1 = ext( v.data.split.v0, v.data.split.v1 );
+        }
         return res;
     }
 };

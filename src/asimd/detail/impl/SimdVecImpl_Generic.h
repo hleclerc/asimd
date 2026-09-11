@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SimdMaskImpl_Generic.h"
+#include "SimdBoolImpl_Generic.h"
 #include "ASIMD_DEBUG_ON_OP.h"
 #include "../support/common_types.h"
 #include "../support/VecValues.h"
@@ -674,13 +674,13 @@ SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1
 
 // cmp operations ------------------------------------------------------------------
 #define SIMD_VEC_IMPL_CMP_OP( NAME, OP ) \
-    /* _as_a_simd_mask */ \
+    /* _as_a_simd_bool */ \
     /* THE THIRD CONDITION IS NOT REDUNDANT, and it was missing. */ \
     /* */ \
     /* This form returns the BIT flavour of mask, and recursing into the split hands each half */ \
-    /* to whatever `NAME##_as_a_simd_mask` resolves to at half the width -- which, wherever a */ \
+    /* to whatever `NAME##_as_a_simd_bool` resolves to at half the width -- which, wherever a */ \
     /* backend registers a register form through SIMD_VEC_IMPL_CMP_OP_SIMDVEC, is the LANE */ \
-    /* flavour. `SimdMaskImpl<8,32>` does not assign to a `SimdMaskImpl<8,1>`, so the whole */ \
+    /* flavour. `SimdBoolImpl<8,32>` does not assign to a `SimdBoolImpl<8,1>`, so the whole */ \
     /* cell was a hard compile error rather than a slow path -- the same shape of hole as the */ \
     /* `data.split` recursion of README section 3, one mechanism over. */ \
     /* */ \
@@ -694,12 +694,12 @@ SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1
     /* The `requires` asks the only question that matters -- do the halves give something this */ \
     /* mask can hold -- and falls back to the lane loop when they do not. */ \
     template<class T,int size,class Arch> HaD \
-    SimdMaskImpl<size,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
-        SimdMaskImpl<size,1,Arch> res; \
-        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdMaskImpl<size,1,Arch>> \
-                    && requires { res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); } ) { \
-            res.data.split.v0 = NAME##_as_a_simd_mask( a.data.split.v0, b.data.split.v0 ); \
-            res.data.split.v1 = NAME##_as_a_simd_mask( a.data.split.v1, b.data.split.v1 ); \
+    SimdBoolImpl<size,1,Arch> NAME##_as_a_simd_bool( const SimdVecImpl<T,size,Arch> &a, const SimdVecImpl<T,size,Arch> &b ) { \
+        SimdBoolImpl<size,1,Arch> res; \
+        if constexpr ( HasSplit<SimdVecImpl<T,size,Arch>> && HasSplit<SimdBoolImpl<size,1,Arch>> \
+                    && requires { res.data.split.v0 = NAME##_as_a_simd_bool( a.data.split.v0, b.data.split.v0 ); } ) { \
+            res.data.split.v0 = NAME##_as_a_simd_bool( a.data.split.v0, b.data.split.v0 ); \
+            res.data.split.v1 = NAME##_as_a_simd_bool( a.data.split.v1, b.data.split.v1 ); \
         } else { \
             res.data.values.set_value( false ); \
             for ( int i = 0; i < size; ++i ) \
@@ -708,8 +708,8 @@ SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1
         return res; \
     } \
     template<class T,class Arch> HaD \
-    SimdMaskImpl<8,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,8,Arch> &a, const SimdVecImpl<T,8,Arch> &b ) { \
-        SimdMaskImpl<8,1,Arch> res; \
+    SimdBoolImpl<8,1,Arch> NAME##_as_a_simd_bool( const SimdVecImpl<T,8,Arch> &a, const SimdVecImpl<T,8,Arch> &b ) { \
+        SimdBoolImpl<8,1,Arch> res; \
         res.data.values.set_values( \
             a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ], a.data.values[ 2 ] OP b.data.values[ 2 ], a.data.values[ 3 ] OP b.data.values[ 3 ], \
             a.data.values[ 4 ] OP b.data.values[ 4 ], a.data.values[ 5 ] OP b.data.values[ 5 ], a.data.values[ 6 ] OP b.data.values[ 6 ], a.data.values[ 7 ] OP b.data.values[ 7 ]  \
@@ -717,24 +717,24 @@ SimdVecImpl<T,1,Arch> anb( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1
         return res; \
     } \
     template<class T,class Arch> HaD \
-    SimdMaskImpl<4,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,4,Arch> &a, const SimdVecImpl<T,4,Arch> &b ) { \
-        SimdMaskImpl<4,1,Arch> res; \
+    SimdBoolImpl<4,1,Arch> NAME##_as_a_simd_bool( const SimdVecImpl<T,4,Arch> &a, const SimdVecImpl<T,4,Arch> &b ) { \
+        SimdBoolImpl<4,1,Arch> res; \
         res.data.values.set_values( \
             a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ], a.data.values[ 2 ] OP b.data.values[ 2 ], a.data.values[ 3 ] OP b.data.values[ 3 ] \
         ); \
         return res; \
     } \
     template<class T,class Arch> HaD \
-    SimdMaskImpl<2,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,2,Arch> &a, const SimdVecImpl<T,2,Arch> &b ) { \
-        SimdMaskImpl<2,1,Arch> res; \
+    SimdBoolImpl<2,1,Arch> NAME##_as_a_simd_bool( const SimdVecImpl<T,2,Arch> &a, const SimdVecImpl<T,2,Arch> &b ) { \
+        SimdBoolImpl<2,1,Arch> res; \
         res.data.values.set_values( \
             a.data.values[ 0 ] OP b.data.values[ 0 ], a.data.values[ 1 ] OP b.data.values[ 1 ] \
         ); \
         return res; \
     } \
     template<class T,class Arch> HaD \
-    SimdMaskImpl<1,1,Arch> NAME##_as_a_simd_mask( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1,Arch> &b ) { \
-        SimdMaskImpl<1,1,Arch> res; \
+    SimdBoolImpl<1,1,Arch> NAME##_as_a_simd_bool( const SimdVecImpl<T,1,Arch> &a, const SimdVecImpl<T,1,Arch> &b ) { \
+        SimdBoolImpl<1,1,Arch> res; \
         res.data.values.set_values( \
             a.data.values[ 0 ] OP b.data.values[ 0 ] \
         ); \
@@ -779,8 +779,8 @@ SIMD_VEC_IMPL_CMP_OP( gt, > )
 
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC( COND, T, NB_ITEMS, ITEM_SIZE, NAME, FUNC ) \
     template<class Arch> requires( Arch::template Has<features::COND>::value ) HaD \
-    auto NAME##_as_a_simd_mask( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
-        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
+    auto NAME##_as_a_simd_bool( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
+        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdBoolImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
     }
 
 /// The same, with an EXCLUSION -- "this feature, and NOT that one".
@@ -799,8 +799,8 @@ SIMD_VEC_IMPL_CMP_OP( gt, > )
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_EXCL( COND, CNOT, T, NB_ITEMS, ITEM_SIZE, NAME, FUNC ) \
     template<class Arch> requires( Arch::template Has<features::COND>::value \
                                 && ! Arch::template Has<features::CNOT>::value ) HaD \
-    auto NAME##_as_a_simd_mask( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
-        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdMaskImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
+    auto NAME##_as_a_simd_bool( const SimdVecImpl<T,NB_ITEMS,Arch> &a, const SimdVecImpl<T,NB_ITEMS,Arch> &b ) { \
+        ASIMD_DEBUG_ON_OP(#NAME,#COND,#FUNC) SimdBoolImpl<NB_ITEMS,ITEM_SIZE,Arch> res; res.data.reg = FUNC; return res; \
     }
 
 #define SIMD_VEC_IMPL_CMP_OP_SIMDVEC_VEC( COND, T, I, SIZE, NAME, FUNC ) \

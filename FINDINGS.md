@@ -35,7 +35,7 @@ cells), and a two-lane permutation of 64-bit elements is two moves whatever you 
 gave `~255 == -256`. Only `__mmask64` escaped. gcc had been printing
 `warning: promoted bitwise complement of an unsigned value is always nonzero` on that exact line
 all along — it was the only warning the library emitted, and nobody was reading it.
-→ complement inside the mask type. `impl/SimdMaskImpl_AVX512.h`
+→ complement inside the mask type. `impl/SimdBoolImpl_AVX512.h`
 
 **1.2 `min` / `max` on unsigned types used the SIGNED instruction.**
 `PI32`/`PI64` went to `_mm*_min_epi32/64`, so `min( 0xFFFFFFFF, 9 )` returned `0xFFFFFFFF`.
@@ -46,7 +46,7 @@ all along — it was the only warning the library emitted, and nobody was readin
 `tmp[ idx & ( N - 1 ) ]`. At N = 5 that is `& 4`: reversing five lanes gave `50 10 10 10 10`.
 Arbitrary widths are the reason asimd exists, so this was the generic form failing on the
 library's own headline case. → `% N`, which folds to the same `and` at a power of two.
-`SimdOpsPlus.h`
+`SimdOps.h`
 
 **1.4 AVX comparisons on 32-bit integers compared 64-bit lanes.**
 `SIMD_VEC_IMPL_CMP_OP_SIMDVEC( AVX, PI32, 8, 32, …, _mm256_cmp_epi64( … ) )` — the wrong lane
@@ -148,7 +148,7 @@ are live rather than aspirational.
 
 ## 3. Dispatch: what actually got selected
 
-### 3.1 `SimdOpsPlus_X86.h` implemented one cell, and it was not the native one
+### 3.1 `ops/X86.h` implemented one cell, and it was not the native one
 
 The grid `tests/test_x86_dispatch.cpp` prints, before:
 
@@ -183,7 +183,7 @@ width the library claims to support, guarded by the features, so a lost registra
 
 ### 3.2 The mask ABI was not fixed alongside the vector ABI
 
-README § 3 removed the array and `Split` from `SIMD_VEC_IMPL_REG`. `SIMD_MASK_IMPL_REG_LARGE` kept
+README § 3 removed the array and `Split` from `SIMD_VEC_IMPL_REG`. `SIMD_BOOL_IMPL_REG_LARGE` kept
 both, so a lane-flavoured mask classified `SSE,SSE,SSE,SSE` → MEMORY. Same rule, same cost:
 
 ```
@@ -325,9 +325,9 @@ array. There is no instruction to dispatch to, so no table entry can fix it.
 ### The split rank, which is the same story one level down
 
 The same question at a width that exceeds the register — `float × 8` under SSE2 — had a worse
-answer, because the operations added by `SimdOpsPlus.h` never used the split at all. Their generic
+answer, because the operations added by `SimdOps.h` never used the split at all. Their generic
 forms walk `values` lane by lane, which is why asimd was **beaten by plain gcc vectors** at the one
-thing it exists for. `SimdOpsPlus_Split.h` registers the missing rank for `cmp_*`, `to_bits`,
+thing it exists for. `ops/Split.h` registers the missing rank for `cmp_*`, `to_bits`,
 `select` and `fma`:
 
 | `to_bits( a > b )` on `float × 8` | plain gcc vectors | asimd before | asimd after |
@@ -476,8 +476,8 @@ The README's § 4 describes the backend; this is the audit half — what the por
 found, and what it measured.
 
 `architectures/ArmCpuFeatures.h`, `impl/arm_intrin.h`, `impl/SimdVecImpl_Neon.h`,
-`impl/SimdMaskImpl_Neon.h`, `SimdOpsPlus_Neon.h`, plus `SimdOpsPlus_Shapes.h` factored out of
-`SimdOpsPlus_X86.h` so both backends share the variant *shapes*. Measured on `clang 17`, Apple M4
+`impl/SimdBoolImpl_Neon.h`, `ops/Neon.h`, plus `ops/Shapes.h` factored out of
+`ops/X86.h` so both backends share the variant *shapes*. Measured on `clang 17`, Apple M4
 Pro; the x86 half of every claim below was re-run at `-msse2`, `-msse4.2`, `-mavx` and
 `-mavx2 -mfma`, and compiled at AVX-512.
 
@@ -557,9 +557,9 @@ second backend that the timings do not make. The fifth -- `a - b` through array-
 is in § 9.6, because MSVC is what found it.
 
 **`any( a > b )` did not compile at 16 lanes** on any target with a register form at 8 — `-mavx`
-and up. The split branch of `NAME##_as_a_simd_mask` assumed both halves returned the *bit* flavour
-of mask; a register form returns the *lane* flavour, and `SimdMaskImpl<8,32>` does not assign to a
-`SimdMaskImpl<8,1>`. A hard error, not a slow path — the same shape of hole as § 2.1, one
+and up. The split branch of `NAME##_as_a_simd_bool` assumed both halves returned the *bit* flavour
+of mask; a register form returns the *lane* flavour, and `SimdBoolImpl<8,32>` does not assign to a
+`SimdBoolImpl<8,1>`. A hard error, not a slow path — the same shape of hole as § 2.1, one
 mechanism over.
 
 It needed 16 lanes *and* a register form at 8, and it survived because nothing reached it:
@@ -669,7 +669,7 @@ instead of counting zero.
 **The fix is to ask the question only where it has an answer.** The enforced probes are now written
 at `SimdSize<T>` — one register by definition on every target, four lanes under SSE2 and on any ARM
 part, eight under AVX2, sixteen under AVX-512 — and their mask flavour is *deduced* from
-`decltype( gt( … ) )` rather than spelled out. That last part matters: `SimdMask<16,32>` asks
+`decltype( gt( … ) )` rather than spelled out. That last part matters: `SimdBool<16,32>` asks
 AVX-512 for a 64-byte **lane** mask, a flavour whose comparisons never produce it and which has no
 register impl, so the first version of this fix failed on AVX-512 for a new reason of its own.
 Nothing in the enforced set now names a width or a flavour.
@@ -710,7 +710,7 @@ instantiation gcc picks for `search<Op,Key,MAX_RANK>`, which the variable templa
 be initialized, can land before the definition it requires.
 
 And the chain that gets it there is not incidental — it is the design. A split rank's `available`
-asks what rank the **halves** reached (`SimdOpsPlus_Split.h`), which re-enters `rank`, which
+asks what rank the **halves** reached (`ops/Split.h`), which re-enters `rank`, which
 re-enters the search, at a smaller width. On x86 at `-msse2` neither `select` nor `permute` has a
 register form at four lanes, so both walk that whole chain; on ARM every one of them is registered,
 so none does. That asymmetry is why it reproduced on one architecture and not the other.

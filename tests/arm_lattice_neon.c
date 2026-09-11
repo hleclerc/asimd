@@ -1,6 +1,6 @@
 /* THE ARMv7-A FLOOR, AS A LIST OF INTRINSICS.
  *
- * Every intrinsic that `SimdVecImpl_Neon.h` and `SimdOpsPlus_Neon.h` register under
+ * Every intrinsic that `SimdVecImpl_Neon.h` and `ops/Neon.h` register under
  * `features::NEON` ALONE -- i.e. everything the backend claims a 32-bit ARM part already has.
  * If one of these turns out to be A64-only, a genuine ARMv7 build fails to compile, on the one
  * machine nobody develops on. That is the exact failure the x86 feature lattice was rewritten

@@ -28,7 +28,7 @@ $inc   = Join-Path $here "..\src"
 $tmp   = Join-Path $env:TEMP ( "asimd_" + [guid]::NewGuid().ToString("N").Substring(0,8) )
 New-Item -ItemType Directory -Path $tmp | Out-Null
 
-# The ARM tests are in the list on purpose. On an x64 MSVC build `SimdOpsPlus_Neon.h` is
+# The ARM tests are in the list on purpose. On an x64 MSVC build `ops/Neon.h` is
 # `#if`'d out entirely, so `ArmCpu<64,NEON,FMA>` has no registrations under it -- which makes
 # `test_arm_ops.cpp` a check that the GENERIC forms give the right answers for an architecture
 # with no backend, run under the one compiler that has no `vector_size` to fall back on. That is

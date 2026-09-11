@@ -4,11 +4,23 @@
 #include "impl/SimdVecImpl_X86.h" // IWYU pragma: export
 #include "impl/SimdVecImpl_Arm.h" // IWYU pragma: export
 
-#include "SimdMask.h"
+#include "SimdBool.h"
 #include "SimdSize.h"
 #include "Ptr.h"   // the `load( P )` / `store( P )` overloads below are written against it
 
 namespace asimd {
+
+template<class T_,int size_,class Arch> struct SimdVec;
+
+// The lane rotations, declared here so that the methods below can name them; defined in
+// `SimdOps.h`, next to the other operations that go through `Selection.h`.
+template<int K,class T,int W,class Arch>       SimdVec<T,W,Arch> ext_lanes   ( const SimdVec<T,W,Arch> &a, const SimdVec<T,W,Arch> &b, N<K> );
+template<int k,int n,class T,int W,class Arch> SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, N<k>, N<n> );
+template<int k,class T,int W,class Arch>       SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, N<k> );
+template<int n,class T,int W,class Arch>       SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, int k, N<n> );
+template<class T,int W,class Arch>             SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, int k, int n );
+template<class T,int W,class Arch>             SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, int k );
+template<int k,class T,int W,class Arch>       SimdVec<T,W,Arch> rotate_lanes( const SimdVec<T,W,Arch> &v, N<k>, int n );
 
 /**
   Simd vector.
@@ -108,7 +120,7 @@ struct SimdVec {
     HaD SimdVec                                  operator*             ( const SimdVec &that ) const { return internal::mul( impl, that.impl ); }
     HaD SimdVec                                  operator/             ( const SimdVec &that ) const { return internal::div( impl, that.impl ); }
 
-    // comparison: return an Op_... that can be converted to a SimdMask or a SimdVec
+    // comparison: return an Op_... that can be converted to a SimdBool or a SimdVec
     HaD auto                                     operator>             ( const SimdVec &that ) const { return internal::gt ( impl, that.impl );  }
     HaD auto                                     operator<             ( const SimdVec &that ) const { return internal::lt ( impl, that.impl );  }
 
@@ -120,16 +132,21 @@ struct SimdVec {
 
     HaD T                                        sum                   () const { return internal::horizontal_sum( impl ); }
 
+    // lane rotations -- see `SimdOps.h`. `k` and `n` are each an `int` or an `N<>`.
+    template<class K,class NN> HaD SimdVec       rotate_lanes          ( K k, NN n ) const { return asimd::rotate_lanes( *this, k, n ); }
+    template<class K> HaD SimdVec                rotate_lanes          ( K k ) const { return asimd::rotate_lanes( *this, k ); }
+    template<int K> HaD SimdVec                  ext_lanes             ( const SimdVec &b, N<K> ) const { return asimd::ext_lanes( *this, b, N<K>() ); }
+
     template<class P> static const P&            _chk_ptr              ( const P &ptr ) { static_assert( P::alignment && ( P::offset != P::alignment ), "this method is expecting a asimd::Ptr<> like object (with `alignment`, `offset` static attributes and a `get` method)" ); return ptr; }
 
     Impl                                         impl;                 ///<
 };
 
 #define SIMD_VEC_IMPL_CMP_OP( NAME, OP ) \
-    template<class T,int size,class Arch> auto as_a_simd_mask( const internal::Op_##NAME<T,size,Arch> &op ) { return simd_mask_from_simd_mask_impl( internal::NAME##_as_a_simd_mask( op.a, op.b ) ); } \
+    template<class T,int size,class Arch> auto as_a_simd_bool( const internal::Op_##NAME<T,size,Arch> &op ) { return simd_bool_from_simd_bool_impl( internal::NAME##_as_a_simd_bool( op.a, op.b ) ); } \
     template<class T,int size,class Arch> auto as_a_simd_vec( const internal::Op_##NAME<T,size,Arch> &op ) { using P = typename PI_<8*sizeof(T)>::T; return SimdVec<P,size,Arch>( internal::NAME##_as_a_simd_vec( op.a, op.b, S<internal::SimdVecImpl<P,size,Arch>>() ) ); } \
-    template<class T,int size,class Arch> bool any( const internal::Op_##NAME<T,size,Arch> &op ) { return any( as_a_simd_mask( op ) ); } \
-    template<class T,int size,class Arch> bool all( const internal::Op_##NAME<T,size,Arch> &op ) { return all( as_a_simd_mask( op ) ); } \
+    template<class T,int size,class Arch> bool any( const internal::Op_##NAME<T,size,Arch> &op ) { return any( as_a_simd_bool( op ) ); } \
+    template<class T,int size,class Arch> bool all( const internal::Op_##NAME<T,size,Arch> &op ) { return all( as_a_simd_bool( op ) ); } \
 
 SIMD_VEC_IMPL_CMP_OP( lt, < )
 SIMD_VEC_IMPL_CMP_OP( gt, > )

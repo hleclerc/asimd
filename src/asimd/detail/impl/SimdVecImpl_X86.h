@@ -5,4 +5,4 @@
 #include "SimdVecImpl_AVX.h"
 #include "SimdVecImpl_SSE2.h"
 
-// #include "SimdMaskImpl_X86.h"
+// #include "SimdBoolImpl_X86.h"

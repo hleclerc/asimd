@@ -1,4 +1,4 @@
-// Every operation added by `SimdOpsPlus.h`, value by value.
+// Every operation added by `SimdOps.h`, value by value.
 #include <asimd/asimd.h>
 
 #include "check.h"

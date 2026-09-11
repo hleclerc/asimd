@@ -15,11 +15,11 @@
 //
 //   architectures  `NativeCpu` (the compile-time target), `LargestCpu`, `X86Cpu<...>`,
 //                  `ArmCpu<...>`, `ScalarCpu`, `CudaGpu<...>` and their feature tags
-//   vectors        `SimdVec<T,size,Arch>`, `SimdMask<...>`, `SimdSize<T,Arch>`, `MaxSimdSize`,
+//   vectors        `SimdVec<T,size,Arch>`, `SimdBool<N,item_size,Arch>` (one boolean per lane), `SimdSize<T,Arch>`, `MaxSimdSize`,
 //                  `NbSimdRegisters`, `SimdAlig`
 //   operations     `fma`, `to_bits`, `mask_from_bits`, `select`, `permute`, `bcast_lane`,
-//                  the lazy comparisons (`a > b`, `eq`, `ge`) with `any`/`all`, `V::iota`,
-//                  and the arithmetic operators
+//                  `rotate_lanes`, `ext_lanes`, the lazy comparisons (`a > b`, `eq`, `ge`) with
+//                  `any`/`all`, `V::iota`, and the arithmetic operators
 //   ranges         `SimdRange`, `SimdRangePtr` -- the vectorized loop over `[beg, end)`
 //   pointers       `Ptr<T,alignment,offset>`, `Int<T,alignment,offset>` -- alignment carried
 //                  in the type, so `load_aligned` versus `load` is decided at compile time
@@ -45,9 +45,9 @@
 #include "detail/MaxSimdSize.h"
 #include "detail/NbSimdRegisters.h"
 #include "detail/SimdAlig.h"
-#include "detail/SimdMask.h"
+#include "detail/SimdBool.h"
 #include "detail/SimdVec.h"
 #include "detail/Selection.h"
-#include "detail/SimdOpsPlus.h"
+#include "detail/SimdOps.h"
 #include "detail/SimdRange.h"
 #include "detail/SimdRangePtr.h"
