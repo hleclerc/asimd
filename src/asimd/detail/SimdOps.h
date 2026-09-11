@@ -12,6 +12,7 @@
 //   `gt` `lt` `eq` `ge`  comparisons materialized as a mask, in whatever flavour the target has
 //   `rotate_lanes`    lanes `[0,n)` rotated by `k` -- `k` and `n` each compile-time (`N<>`) or not
 //   `ext_lanes<K>`    `a[K..N) ++ b[0..K)`: `EXT` / `alignr`, the primitive a rotation is made of
+//   `load_partial` `store_partial`  the lanes of a set and not one byte outside them (`V::load_partial( p, n )`)
 //   `add` `sub` `mul` `div` `min` `max` `sum`  the arithmetic as free functions, so that they can
 //                     take a LANE SET (`LaneSet.h`): `add( a, b, LaneRange<0,3>() )` computes
 //                     only the registers that hold lanes 0-2. `fma`, `select`, the comparisons,
@@ -272,23 +273,14 @@ SimdVec<U,W,Arch> select( const internal::Op_gt<T,W,Arch> &op, const SimdVec<U,W
 
 // ---- reductions: the set is part of the answer -----------------------------------------------
 namespace internal {
-    /// a lane of all ones, in T's own bits
-    template<class T> constexpr T all_ones_lane() {
-        using U = typename PI_<8 * sizeof( T )>::T;
-        return std::bit_cast<T>( U( ~U( 0 ) ) );
+    template<LaneSet Set,class T,int N,class Arch>
+    SimdVecImpl<T,N,Arch> load_partial( const T *ptr, const Set &set, S<SimdVecImpl<T,N,Arch>> ) {
+        return sel::call<ops::load_partial,Key<T,N,Arch>>( ptr, set );
     }
-    /// all ones on the lanes of a STATIC set, zero elsewhere -- what a bitwise and keeps.
-    /// A bitwise and rather than a multiply by 0/1: the lanes outside the set may hold anything,
-    /// a NaN included, and `NaN * 0` is `NaN`.
-    template<LaneSet S,class T,int N>
-    struct LanePattern {
-        static constexpr std::array<T,N> make() {
-            std::array<T,N> r{};
-            for ( int i = 0; i < N; ++i ) r[ i ] = S().has( i ) ? all_ones_lane<T>() : T( 0 );
-            return r;
-        }
-        alignas( 64 ) static constexpr std::array<T,N> v = make();
-    };
+    template<LaneSet Set,class T,int N,class Arch>
+    void store_partial( T *ptr, const SimdVecImpl<T,N,Arch> &v, const Set &set ) {
+        sel::call<ops::store_partial,Key<T,N,Arch>>( ptr, v, set );
+    }
 
     template<LaneSet S,class T,int N,class Arch>
     T sum_pruned( const S &s, const SimdVecImpl<T,N,Arch> &v ) {

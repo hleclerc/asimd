@@ -67,6 +67,15 @@ struct SimdVec {
     template<class G> static HaD SimdVec         load_aligned_stream   ( const G *ptr ) { return internal::load_aligned_stream( ptr, S<Impl>() ); }
     template<class P> static HaD SimdVec         load_stream           ( const P &ptr ) { return internal::load_stream( _chk_ptr( ptr ), S<Impl>() ); } ///< P::alignment, P::offset, data.get()
 
+    // the lanes of a set, and NOT ONE BYTE OUTSIDE THEM -- the load and store for the tail of a
+    // buffer. `n` alone means the first `n` lanes. Loaded lanes outside the set are unspecified.
+    template<LaneSet S> static HaD SimdVec       load_partial          ( const T *ptr, const S &s ) { return internal::load_partial( ptr, s, asimd::S<Impl>() ); }
+    static HaD SimdVec                           load_partial          ( const T *ptr, int n ) { return load_partial( ptr, LaneRange<0>( n ) ); }
+    template<LaneSet S> static HaD void          store_partial         ( T *ptr, const SimdVec &vec, const S &s ) { internal::store_partial( ptr, vec.impl, s ); }
+    static HaD void                              store_partial         ( T *ptr, const SimdVec &vec, int n ) { store_partial( ptr, vec, LaneRange<0>( n ) ); }
+    template<LaneSet S> HaD void                 store_partial         ( T *ptr, const S &s ) const { internal::store_partial( ptr, impl, s ); }
+    HaD void                                     store_partial         ( T *ptr, int n ) const { store_partial( ptr, LaneRange<0>( n ) ); }
+
     static HaD void                              init_unaligned        ( T *ptr, const SimdVec &vec ) { internal::init_unaligned( ptr, vec.impl ); }
     static HaD void                              init_aligned          ( T *ptr, const SimdVec &vec ) { internal::init_aligned( ptr, vec.impl ); }
     template<class P> static HaD void            init                  ( const P &ptr, const SimdVec &vec ) { internal::init( _chk_ptr( ptr ), vec.impl ); }

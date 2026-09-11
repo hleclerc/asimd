@@ -31,6 +31,10 @@ namespace ops {
     template<int K,int n> struct rotate_lanes {};
     /// `a[K..N) ++ b[0..K)` -- what ARM calls `EXT` and x86 `alignr`. `K` in `[1,N)` here too.
     template<int K> struct ext_lanes {};
+    /// the lanes of a set from / to memory, touching no byte outside them. `run` is a template
+    /// on the set.
+    struct load_partial {};
+    struct store_partial {};
 }
 
 /// Reads the item size back out of a mask type. Needed because the flavour a comparison returns

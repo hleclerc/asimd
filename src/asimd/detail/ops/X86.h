@@ -163,6 +163,38 @@ ASIMD_OPS_PSHUFB_32( PI32 );
 ASIMD_OPS_PERMUTE( AVX, FP32, 4, _mm_permutevar_ps( v.data.reg, idx.data.reg ) );
 ASIMD_OPS_PERMUTE( AVX, SI32, 4, _mm_castps_si128( _mm_permutevar_ps( _mm_castsi128_ps( v.data.reg ), idx.data.reg ) ) );
 ASIMD_OPS_PERMUTE( AVX, PI32, 4, _mm_castps_si128( _mm_permutevar_ps( _mm_castsi128_ps( v.data.reg ), idx.data.reg ) ) );
+
+// ---- partial load / store: `vmaskmovps` / `vmaskmovpd`, AVX. They read and write ONLY the lanes
+// whose mask lane has its top bit set, and fault on none of the others -- which is the contract.
+// The mask is a constant for a static set and is built from the bits otherwise: broadcast,
+// keep one bit per lane, compare back (SSE2 integer ops, so this works under AVX alone). The
+// 64-bit lanes are compared as pairs of 32-bit ones with the same bit in both. Every type goes
+// through the `ps` / `pd` form: the instruction moves bits. Gives way to AVX-512VL's masked
+// encodings, which take the bits directly.
+namespace internal {
+    template<LaneSet S,int LANE_BYTES,int N>
+    __m128i x86_lane_mask_128( const S &set ) {
+        if constexpr ( S::is_static ) {
+            return _mm_load_si128( (const __m128i *) LanePattern<S,typename PI_<8 * LANE_BYTES>::T,N>::v.data() );
+        } else if constexpr ( LANE_BYTES == 4 ) {
+            const __m128i sel = _mm_setr_epi32( 1, 2, 4, 8 );
+            return _mm_cmpeq_epi32( _mm_and_si128( _mm_set1_epi32( int( set.bits( 4 ) ) ), sel ), sel );
+        } else {
+            const __m128i sel = _mm_setr_epi32( 1, 1, 2, 2 );
+            return _mm_cmpeq_epi32( _mm_and_si128( _mm_set1_epi32( int( set.bits( 2 ) ) ), sel ), sel );
+        }
+    }
+}
+#define ASIMD_X86_PARTIAL_128( T, N, SUF, PTR_T, OF, TO ) \
+    ASIMD_OPS_LOAD_PARTIAL ( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), T, N, OF( _mm_maskload_##SUF( (const PTR_T *) ptr, internal::x86_lane_mask_128<S,sizeof( T ),N>( set ) ) ) ); \
+    ASIMD_OPS_STORE_PARTIAL( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), T, N, _mm_maskstore_##SUF( (PTR_T *) ptr, internal::x86_lane_mask_128<S,sizeof( T ),N>( set ), TO( v.data.reg ) ) )
+ASIMD_X86_PARTIAL_128( FP32, 4, ps, float,  ASIMD_X86_ID,     ASIMD_X86_ID );
+ASIMD_X86_PARTIAL_128( SI32, 4, ps, float,  _mm_castps_si128, _mm_castsi128_ps );
+ASIMD_X86_PARTIAL_128( PI32, 4, ps, float,  _mm_castps_si128, _mm_castsi128_ps );
+ASIMD_X86_PARTIAL_128( FP64, 2, pd, double, ASIMD_X86_ID,     ASIMD_X86_ID );
+ASIMD_X86_PARTIAL_128( SI64, 2, pd, double, _mm_castpd_si128, _mm_castsi128_pd );
+ASIMD_X86_PARTIAL_128( PI64, 2, pd, double, _mm_castpd_si128, _mm_castsi128_pd );
+#undef ASIMD_X86_PARTIAL_128
 #endif
 
 #ifdef ASIMD_X86_HAS_FMA
@@ -239,6 +271,42 @@ ASIMD_OPS_AVX_PERM8( SI32, _mm256_castsi256_ps, _mm256_castps_si256 );
 ASIMD_OPS_AVX_PERM8( PI32, _mm256_castsi256_ps, _mm256_castps_si256 );
 #undef ASIMD_ID_PS
 #undef ASIMD_OPS_AVX_PERM8
+
+// ---- partial load / store at 256 bits. `vmaskmovps` again. The dynamic mask needs 256-bit
+// integer compares, which are AVX2: under AVX alone only a static set gets the instruction and a
+// dynamic one goes lane by lane.
+namespace internal {
+    template<LaneSet S,int LANE_BYTES,int N>
+    __m256i x86_lane_mask_256( const S &set ) {
+        if constexpr ( S::is_static ) {
+            return _mm256_load_si256( (const __m256i *) LanePattern<S,typename PI_<8 * LANE_BYTES>::T,N>::v.data() );
+        } else if constexpr ( LANE_BYTES == 4 ) {
+            const __m256i sel = _mm256_setr_epi32( 1, 2, 4, 8, 16, 32, 64, 128 );
+            return _mm256_cmpeq_epi32( _mm256_and_si256( _mm256_set1_epi32( int( set.bits( 8 ) ) ), sel ), sel );
+        } else {
+            const __m256i sel = _mm256_setr_epi64x( 1, 2, 4, 8 );
+            return _mm256_cmpeq_epi64( _mm256_and_si256( _mm256_set1_epi64x( (long long) set.bits( 4 ) ), sel ), sel );
+        }
+    }
+}
+#define ASIMD_X86_PARTIAL_256( REQ, T, N, SUF, PTR_T, OF, TO ) \
+    ASIMD_OPS_LOAD_PARTIAL ( REQ, T, N, ( [ & ] { \
+        if constexpr ( S::is_static || Arch::template Has<features::AVX2>::value ) \
+            return OF( _mm256_maskload_##SUF( (const PTR_T *) ptr, internal::x86_lane_mask_256<S,sizeof( T ),N>( set ) ) ); \
+        else \
+            return sel::Variant<ops::load_partial,Key<T,N,Arch>,sel::GENERIC>::run( ptr, set ).data.reg; }() ) ); \
+    ASIMD_OPS_STORE_PARTIAL( REQ, T, N, ( [ & ] { \
+        if constexpr ( S::is_static || Arch::template Has<features::AVX2>::value ) \
+            _mm256_maskstore_##SUF( (PTR_T *) ptr, internal::x86_lane_mask_256<S,sizeof( T ),N>( set ), TO( v.data.reg ) ); \
+        else \
+            sel::Variant<ops::store_partial,Key<T,N,Arch>,sel::GENERIC>::run( ptr, v, set ); }() ) )
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), FP32, 8, ps, float,  ASIMD_X86_ID,        ASIMD_X86_ID );
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), SI32, 8, ps, float,  _mm256_castps_si256, _mm256_castsi256_ps );
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), PI32, 8, ps, float,  _mm256_castps_si256, _mm256_castsi256_ps );
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), FP64, 4, pd, double, ASIMD_X86_ID,        ASIMD_X86_ID );
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), SI64, 4, pd, double, _mm256_castpd_si256, _mm256_castsi256_pd );
+ASIMD_X86_PARTIAL_256( ASIMD_OPS_REQ_EXCL( AVX, AVX512VL ), PI64, 4, pd, double, _mm256_castpd_si256, _mm256_castsi256_pd );
+#undef ASIMD_X86_PARTIAL_256
 
 // ---- rotate_lanes and ext_lanes at 256 bits WITHOUT AVX2. There is no `vpalignr ymm` and no
 // `vpermps` here: what AVX has is `vperm2f128` to swap or pair the two 128-bit halves and
@@ -462,6 +530,25 @@ ASIMD_OPS_ROTATE_IF( AVX512, n < 8, FP64,  8, _mm512_permutexvar_pd   ( _mm512_l
 ASIMD_OPS_ROTATE_IF( AVX512, n < 8, SI64,  8, _mm512_permutexvar_epi64( _mm512_load_si512( ( rot::Idx<K,n,8,std::int64_t>::v.data() ) ), v.data.reg ) );
 ASIMD_OPS_ROTATE_IF( AVX512, n < 8, PI64,  8, _mm512_permutexvar_epi64( _mm512_load_si512( ( rot::Idx<K,n,8,std::int64_t>::v.data() ) ), v.data.reg ) );
 
+// ---- partial load / store: the masked encodings, `{k}{z}` on the load and `{k}` on the store.
+// The bits of the set ARE the mask register, so both shapes of set cost the same one `kmov`.
+#define ASIMD_X86_PARTIAL_K( REQ, T, N, PFX, SUF, MASK ) \
+    ASIMD_OPS_LOAD_PARTIAL ( REQ, T, N, PFX##_maskz_loadu_##SUF( MASK( set.bits( N ) ), ptr ) ); \
+    ASIMD_OPS_STORE_PARTIAL( REQ, T, N, PFX##_mask_storeu_##SUF( ptr, MASK( set.bits( N ) ), v.data.reg ) )
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), FP32, 16, _mm512, ps,    __mmask16 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), SI32, 16, _mm512, epi32, __mmask16 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), PI32, 16, _mm512, epi32, __mmask16 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), FP64,  8, _mm512, pd,    __mmask8  );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), SI64,  8, _mm512, epi64, __mmask8  );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512 ), PI64,  8, _mm512, epi64, __mmask8  );
+
+#ifdef ASIMD_X86_HAS_AVX512BW
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512BW ), SI16, 32, _mm512, epi16, __mmask32 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512BW ), PI16, 32, _mm512, epi16, __mmask32 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512BW ), SI8 , 64, _mm512, epi8,  __mmask64 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512BW ), PI8 , 64, _mm512, epi8,  __mmask64 );
+#endif // ASIMD_X86_HAS_AVX512BW
+
 #ifdef ASIMD_X86_HAS_AVX512BW
 // ---- 16-bit lanes, AVX-512BW: `vpermw` takes a constant index for either shape of rotation,
 // and `vpermi2w` reads a two-table index for `ext_lanes`. The 8-bit lanes would need `vpermb`
@@ -518,6 +605,21 @@ ASIMD_OPS_VL_SELECT( PI64, 2, _mm_mask_blend_epi64    );
 // AVX-512VL: the AVX2 `_mm256_permutevar_pd` only moves within each 128-bit half.
 ASIMD_OPS_PERMUTE( AVX512VL, FP64, 4, _mm256_permutexvar_pd   ( _mm256_cvtepi32_epi64( idx.data.reg ), v.data.reg ) );
 ASIMD_OPS_PERMUTE( AVX512VL, SI64, 4, _mm256_permutexvar_epi64( _mm256_cvtepi32_epi64( idx.data.reg ), v.data.reg ) );
+
+// ---- partial load / store at 128 and 256 bits, the masked encodings again.
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), FP32, 8, _mm256, ps,    __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), SI32, 8, _mm256, epi32, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), PI32, 8, _mm256, epi32, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), FP64, 4, _mm256, pd,    __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), SI64, 4, _mm256, epi64, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), PI64, 4, _mm256, epi64, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), FP32, 4, _mm,    ps,    __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), SI32, 4, _mm,    epi32, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), PI32, 4, _mm,    epi32, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), FP64, 2, _mm,    pd,    __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), SI64, 2, _mm,    epi64, __mmask8 );
+ASIMD_X86_PARTIAL_K( ASIMD_OPS_REQ1( AVX512VL ), PI64, 2, _mm,    epi64, __mmask8 );
+#undef ASIMD_X86_PARTIAL_K
 #endif // ASIMD_X86_HAS_AVX512VL
 
 #endif // ASIMD_X86_HAS_AVX512F

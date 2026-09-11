@@ -19,7 +19,8 @@
 //                  `SimdSize<T,Arch>`, `MaxSimdSize`, `NbSimdRegisters`, `SimdAlig`
 //   lane sets      `LaneRange<beg,end>`, `LaneMask<beg,end>` -- "the lanes I will read", as a
 //                  trailing argument: `add( a, b, LaneRange<0,3>() )` skips the registers that
-//                  hold none of them
+//                  hold none of them; `V::load_partial( p, n )` / `store_partial` touch no byte
+//                  outside them
 //   operations     `fma`, `to_bits`, `mask_from_bits`, `select`, `permute`, `bcast_lane`,
 //                  `rotate_lanes`, `ext_lanes`, the lazy comparisons (`a > b`, `eq`, `ge`) with
 //                  `any`/`all`, `V::iota`, and the arithmetic operators

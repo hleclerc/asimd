@@ -226,4 +226,22 @@ struct ExtIdx {
         static V run( const V &a, const V &b ) { V res; res.data.reg = FUNC; return res; } \
     }
 
+/// partial load / store. `ptr` and `set` are available inside FUNC, plus `v` for the store.
+/// `REQ` is the whole constraint, so that a row can exclude the feature that supersedes it: a
+/// masked move on an AVX target gives way to the masked encoding of AVX-512VL, at the same rank.
+#define ASIMD_OPS_LOAD_PARTIAL( REQ, T, N, FUNC ) \
+    template<class Arch> requires ( REQ ) \
+    struct sel::Variant<ops::load_partial,Key<T,N,Arch>,sel::REGISTER> { \
+        static constexpr bool available = true; \
+        using V = internal::SimdVecImpl<T,N,Arch>; \
+        template<LaneSet S> static V run( const T *ptr, const S &set ) { V res; res.data.reg = FUNC; return res; } \
+    }
+#define ASIMD_OPS_STORE_PARTIAL( REQ, T, N, FUNC ) \
+    template<class Arch> requires ( REQ ) \
+    struct sel::Variant<ops::store_partial,Key<T,N,Arch>,sel::REGISTER> { \
+        static constexpr bool available = true; \
+        using V = internal::SimdVecImpl<T,N,Arch>; \
+        template<LaneSet S> static void run( T *ptr, const V &v, const S &set ) { FUNC; } \
+    }
+
 } // namespace asimd

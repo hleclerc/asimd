@@ -46,6 +46,8 @@
 #include "impl/SimdBoolImpl_Generic.h"
 #include "support/common_types.h"
 
+#include <array>
+#include <bit>
 #include <type_traits>
 #include <utility>
 
@@ -175,6 +177,34 @@ template<class I> inline constexpr int width_of = WidthOf<std::remove_cvref_t<I>
 template<class I> struct ItemSizeOfImpl { static constexpr int value = 0; };
 template<int N,int IS,class Arch> struct ItemSizeOfImpl<SimdBoolImpl<N,IS,Arch>> { static constexpr int value = IS; };
 template<class I> inline constexpr int item_size_of = ItemSizeOfImpl<std::remove_cvref_t<I>>::value;
+
+/// a lane of all ones, in T's own bits
+template<class T> constexpr T all_ones_lane() {
+    using U = typename PI_<8 * sizeof( T )>::T;
+    return std::bit_cast<T>( U( ~U( 0 ) ) );
+}
+
+/// all ones on the lanes of a STATIC set, zero elsewhere -- what a bitwise and keeps, and what
+/// `vmaskmov` reads. A bitwise and rather than a multiply by 0/1: the lanes outside the set may
+/// hold anything, a NaN included, and `NaN * 0` is `NaN`.
+template<LaneSet S,class T,int N>
+struct LanePattern {
+    static constexpr std::array<T,N> make() {
+        std::array<T,N> r{};
+        for ( int i = 0; i < N; ++i ) r[ i ] = S().has( i ) ? all_ones_lane<T>() : T( 0 );
+        return r;
+    }
+    alignas( 64 ) static constexpr std::array<T,N> v = make();
+};
+
+/// PARTIAL LOAD AND STORE: the lanes of the set, and NOT ONE BYTE OUTSIDE THEM -- this is the
+/// operation for the tail of a buffer, where the lane past the end is another page. A loaded
+/// lane outside the set is unspecified; a stored one is left alone. Declared here so that
+/// `SimdVec` can name them; defined in `SimdOps.h`, where the variants are.
+template<LaneSet Set,class T,int N,class Arch>
+SimdVecImpl<T,N,Arch> load_partial( const T *ptr, const Set &set, S<SimdVecImpl<T,N,Arch>> );
+template<LaneSet Set,class T,int N,class Arch>
+void store_partial( T *ptr, const SimdVecImpl<T,N,Arch> &v, const Set &set );
 
 /// the halves of an impl, as types
 template<class I> using Half0 = std::remove_cvref_t<decltype( std::declval<I>().data.split.v0 )>;

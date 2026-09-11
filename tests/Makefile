@@ -14,7 +14,7 @@
 # and picks the parent's `xmake.lua`.
 
 XMAKE ?= xmake
-TESTS := test_ops test_split test_selection test_rotate test_lanes test_x86_ops test_x86_dispatch \
+TESTS := test_ops test_split test_selection test_rotate test_lanes test_partial test_x86_ops test_x86_dispatch \
          test_arm_ops test_arm_dispatch
 
 all: run

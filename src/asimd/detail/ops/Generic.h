@@ -10,6 +10,7 @@
 // =============================================================================================
 
 #include "Key.h"
+#include "../LaneSet.h"
 
 namespace asimd {
 
@@ -96,6 +97,64 @@ struct sel::Variant<ops::ext_lanes<K>,Key<T,N,Arch>,sel::GENERIC> {
         for ( int i = 0; i < N; ++i )
             res.data.values[ i ] = i + K < N ? a.data.values[ i + K ] : b.data.values[ i + K - N ];
         return res;
+    }
+};
+
+/// Across a split: recurse, skipping a half the set does not reach -- statically, or behind a
+/// branch, since the alternative at the register is a lane loop, not an instruction. On one
+/// register: the plain load when the set is known to cover it, lane by lane otherwise. The lane
+/// loop is what makes the contract hold everywhere: it reads exactly the lanes of the set.
+template<class T,int N,class Arch>
+struct sel::Variant<ops::load_partial,Key<T,N,Arch>,sel::GENERIC> {
+    static constexpr bool available = true;
+    using V = internal::SimdVecImpl<T,N,Arch>;
+    template<LaneSet S>
+    static V run( const T *ptr, const S &set ) {
+        V res;
+        if constexpr ( internal::hull_covers<S,0,N> ) {
+            res = internal::load_unaligned( ptr, asimd::S<V>() );
+        } else if constexpr ( internal::HasSplit<V> ) {
+            constexpr int n0 = V::split_size_0;
+            const auto lo = [ & ] { res.data.split.v0 = sel::call<ops::load_partial,Key<T,n0,Arch>>( ptr, set ); };
+            const auto hi = [ & ] { res.data.split.v1 = sel::call<ops::load_partial,Key<T,N - n0,Arch>>( ptr + n0, set.template shifted<n0>() ); };
+            if constexpr ( internal::hull_disjoint<S,n0,N> ) lo();
+            else if constexpr ( internal::hull_disjoint<S,0,n0> ) hi();
+            else if constexpr ( S::is_static ) { lo(); hi(); }
+            else {
+                if ( ! set.empty( 0, n0 ) ) lo();
+                if ( ! set.empty( n0, N ) ) hi();
+            }
+        } else {
+            for ( int i = 0; i < N; ++i )
+                if ( set.has( i ) ) res.data.values[ i ] = ptr[ i ];
+        }
+        return res;
+    }
+};
+
+template<class T,int N,class Arch>
+struct sel::Variant<ops::store_partial,Key<T,N,Arch>,sel::GENERIC> {
+    static constexpr bool available = true;
+    using V = internal::SimdVecImpl<T,N,Arch>;
+    template<LaneSet S>
+    static void run( T *ptr, const V &v, const S &set ) {
+        if constexpr ( internal::hull_covers<S,0,N> ) {
+            internal::store_unaligned( ptr, v );
+        } else if constexpr ( internal::HasSplit<V> ) {
+            constexpr int n0 = V::split_size_0;
+            const auto lo = [ & ] { sel::call<ops::store_partial,Key<T,n0,Arch>>( ptr, v.data.split.v0, set ); };
+            const auto hi = [ & ] { sel::call<ops::store_partial,Key<T,N - n0,Arch>>( ptr + n0, v.data.split.v1, set.template shifted<n0>() ); };
+            if constexpr ( internal::hull_disjoint<S,n0,N> ) lo();
+            else if constexpr ( internal::hull_disjoint<S,0,n0> ) hi();
+            else if constexpr ( S::is_static ) { lo(); hi(); }
+            else {
+                if ( ! set.empty( 0, n0 ) ) lo();
+                if ( ! set.empty( n0, N ) ) hi();
+            }
+        } else {
+            for ( int i = 0; i < N; ++i )
+                if ( set.has( i ) ) ptr[ i ] = T( internal::at( v, i ) );
+        }
     }
 };
 
