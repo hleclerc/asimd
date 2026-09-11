@@ -550,10 +550,11 @@ A64-only has to disappear and leave *the same answers* behind. `test_arm_dispatc
 rank grids side by side, and the ARMv7 column is visibly poorer (33 of 63 cells generic against 3),
 which is what says the two levels are really separate rather than one level written twice.
 
-### 9.2 Four bugs in the x86 code, found by four different mechanisms
+### 9.2 Five bugs in the x86 code, found by five different mechanisms
 
 None of these is ARM's. Each was found by a different part of the port, which is the argument for a
-second backend that the timings do not make.
+second backend that the timings do not make. The fifth -- `a - b` through array-to-pointer decay --
+is in § 9.6, because MSVC is what found it.
 
 **`any( a > b )` did not compile at 16 lanes** on any target with a register form at 8 — `-mavx`
 and up. The split branch of `NAME##_as_a_simd_mask` assumed both halves returned the *bit* flavour
@@ -745,7 +746,95 @@ materialised its ranks through `rank_at_native_width<Op,T>()` rather than naming
 a non-template function. Belt and braces — the `Selection.h` change is what makes the error
 impossible, that one makes the two files structurally the same.
 
-### 9.6 What the backend costs, where it costs anything
+### 9.6 MSVC ran for the first time, and found a compile error nothing local could reach
+
+`/arch:AVX` failed on the Windows job:
+
+```
+SimdVecImpl_Generic.h(611): error C3863: array type 'SimdVecImpl<T_,4,Arch>::Values'
+                                         is not assignable
+```
+
+**Array-to-pointer decay, in a `requires` test that was asking the wrong question.** The generic
+arithmetic form chooses between three branches, and the middle one is guarded by
+
+```cpp
+} else if constexpr ( requires { a.data.values OP b.data.values; } ) {
+        res.data.values = a.data.values OP b.data.values;
+```
+
+which reads as "does `values` support this operator as a whole vector". On MSVC -- and under
+`ASIMD_NO_COMPILER_VECTORS` -- `values` is a plain `T[ N ]`, and `a.data.values - b.data.values`
+decays to **pointer subtraction**: perfectly valid, and it yields a `ptrdiff_t`. So the test said
+yes for `sub`, the branch was taken, and assigning an integer to an array is a hard error. `+`,
+`*`, `/` and `&` are all ill-formed on pointers, so `sub` was the only operator affected — which is
+why one third of the table was fine and one cell was not.
+
+The fix is one token: ask whether the result can be **assigned back**.
+
+```cpp
+} else if constexpr ( requires { res.data.values = a.data.values OP b.data.values; } ) {
+```
+
+Pre-existing, and verified so by checking out the tree from before this port. Reproduced locally in
+one line with clang: `-mavx -DASIMD_NO_COMPILER_VECTORS` gives
+`error: array type 'Values' (aka 'long[4]') is not assignable`, the same defect in clang's words.
+
+**Why no local row reached it, which is the more useful half.** The cell has to be one where a
+register IMPL exists but the operation has no register FORM — on x86 that is 256-bit integer
+`add`/`sub`: AVX provides the impls, AVX2 provides the instructions. The two `MSVC path` rows in
+`run_all_isa.sh` were `-msse2`, where the 128-bit integer add/sub are registered, and
+`-march=native`, where the 256-bit ones are. The gap sits exactly between them, and it is exactly
+what MSVC calls `/arch:AVX`. There is an `-mavx -DASIMD_NO_COMPILER_VECTORS` row now, labelled as
+such; with the old code it fails and with the new code it passes, which is the only test of a new
+test row worth running.
+
+All four `/arch:` levels were then walked in the no-vector-extension path — baseline, AVX, AVX2,
+AVX512 — and all four compile every test. That is not MSVC, but it is MSVC's *constraint*, which is
+the half that can be checked from here. One further MSVC-only risk was removed rather than tested:
+the `bcast_lane` split form called a member template with explicit template arguments from inside
+its own class, the shape MSVC's two-phase lookup has always been weakest on. It is a free function
+template now; nothing is lost, and it is one less thing that can only be found by pushing.
+
+MSVC also reported a `C4244` narrowing warning in `test_ops.cpp`: `to_bits` returns a `PI64`
+because a mask can be 64 lanes wide, and the test stored it in an `unsigned`. The value was right
+at eight lanes; the type was smaller than the operation hands back.
+
+**And then one runtime failure, at `/arch:AVX2` only, which is still open.**
+
+```
+    FAIL   tests\test_arm_ops.cpp:157  [SI16x16]  same
+```
+
+A store round trip: load sixteen `SI16`, store them back, compare. It fails at `/arch:AVX2` and
+passes at `/arch:AVX`, and **nothing in the library differs between the two for that type**:
+`SimdVec<SI16,16>` has no register impl on x86 below AVX-512BW, so both levels take the identical
+splittable path, same `split_size_0` of 8, same generic recursion down to one lane — checked by
+printing the impl's shape at both levels. The same sixteen lanes of the same value are also read by
+roughly fifteen other checks in the same grid cell, through `lanes_are`, and every one of them
+passes on that build.
+
+So the data is not in question and the dispatch is not in question. What is left is either MSVC's
+code generation on the comparison loop, or the one thing that check did which nothing else in the
+suite does: reach the value through `SimdVec`'s **member** `store_unaligned( T* )` rather than the
+static two-argument form.
+
+It could not be reproduced here — the MSVC *constraint* runs clean at all three levels
+(`-msse2`, `-mavx`, `-mavx2 -mfma` with `ASIMD_NO_COMPILER_VECTORS`, built **and run** this time,
+which is the gap that let this reach CI in the first place: the MSVC-path rows had only been
+compiled). So the check was rewritten to answer the question on the next run rather than to guess:
+
+- it exercises the static form and the member form **separately**, so a failure says which;
+- it reports the **lane** and both values, where `[SI16x16] same` reported nothing usable;
+- and it drops the `bool same = true; … same &= ( … )` reduction. That shape is a bool reduction
+  over a counted loop, which is exactly what an auto-vectorizer reaches for — simultaneously the
+  least informative formulation available and the most likely to be miscompiled. Two places in
+  the file used it; neither does now.
+
+Anything in this suite that ends in a bare `bool` and a loop has the same two problems, and that
+is the transferable part.
+
+### 9.7 What the backend costs, where it costs anything
 
 Two honest numbers, both regressions, both understood.
 
@@ -767,7 +856,7 @@ intrinsic makes, and it is worth writing down because the instruction count — 
 `no_vecext.sh` measures — says the opposite: 5 against 5 at four lanes, 6 against 8 at eight, 9
 against 14 at sixteen. Both measurements are right about different things.
 
-### 9.7 What is left
+### 9.8 What is left
 
 Three cells on ARM reach nothing better than a lane loop, and they are one cell three times:
 `permute` on `double`. The index vector is always `SimdVec<SI32,N>`, and at two lanes that is 64

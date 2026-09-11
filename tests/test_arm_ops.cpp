@@ -30,6 +30,29 @@ using namespace asimd;
 using V7 = ArmCpu<64, features::NEON, features::FMA>;
 
 
+/// compares `n` lanes of a raw buffer against what they should be, and says WHICH lane differs.
+///
+/// NOT `bool same = true; ... same &= ( got[ i ] == want[ i ] )`, which is what this file used to
+/// do in two places. That shape has two faults and both of them cost a CI round trip:
+///
+///   IT REPORTS NOTHING. The failure printed `[SI16x16] same` -- true, something differed, on a
+///   compiler nobody here can run. Which lane, and by how much, is the whole of the information.
+///
+///   IT IS A BOOL REDUCTION OVER A COUNTED LOOP, which is exactly the shape an auto-vectorizer
+///   reaches for. So it was simultaneously the least informative formulation available and the
+///   most likely to be miscompiled -- and it failed on MSVC at `/arch:AVX2` only, where nothing
+///   in the library differs from `/arch:AVX` at all: `SimdVec<SI16,16>` has no register impl on
+///   x86 below AVX-512BW, so it is the same splittable path, same `split_size_0`, at both levels.
+static bool lanes_match( const char *label, const char *what, const auto *got, const auto *want, int n ) {
+    for ( int i = 0; i < n; ++i )
+        if ( got[ i ] != want[ i ] ) {
+            printf( "  [%s] %s: lane %d is %g, expected %g\n",
+                    label, what, i, double( got[ i ] ), double( want[ i ] ) );
+            return false;
+        }
+    return true;
+}
+
 // =============================================================================================
 // THE GRID, over (type, width, architecture).
 //
@@ -150,11 +173,15 @@ static void grid( const char *label ) {
         for ( int i = 0; i < N; ++i ) e[ i ] = double( T( T( 3 ) + T( i ) * T( 2 ) ) );
         CHECK_AT( label, lanes_are( V::iota( T( 3 ), T( 2 ) ), e, N ) );
 
-        alignas( 64 ) T out[ 64 ] = {};
-        a.store_unaligned( out );
-        bool same = true;
-        for ( int i = 0; i < N; ++i ) same &= ( out[ i ] == sa[ i ] );
-        CHECK_AT( label, same );
+        // BOTH SPELLINGS OF THE STORE, separately. `lanes_are` -- and therefore every other
+        // check above -- goes through the STATIC two-argument form; the member form is reached by
+        // nothing else in the suite, and forwards to it. Checking them apart is what says whether
+        // a failure is in the data or in the forwarding.
+        alignas( 64 ) T o_static[ 64 ] = {}, o_member[ 64 ] = {};
+        V::store_unaligned( o_static, a );
+        a.store_unaligned( o_member );
+        CHECK_AT( label, lanes_match( label, "store_unaligned, static form", o_static, sa, N ) );
+        CHECK_AT( label, lanes_match( label, "store_unaligned, member form", o_member, sa, N ) );
     }
 }
 
@@ -245,9 +272,7 @@ int main() {
         // operations whose ARM forms differ most from their fallbacks.
         fma( permute( a, ia ), Va( 3.f ), select( a > Va( 0.f ), a, Va( -1.f ) ) ).store_unaligned( ra );
         fma( permute( b, ib ), Vb( 3.f ), select( b > Vb( 0.f ), b, Vb( -1.f ) ) ).store_unaligned( rb );
-        bool same = true;
-        for ( int i = 0; i < 8; ++i ) same &= ( ra[ i ] == rb[ i ] );
-        CHECK( same );
+        CHECK( lanes_match( "A vs V7", "fma( permute, select ) must agree", ra, rb, 8 ) );
 
         CHECK( to_bits( asimd::gt( a, Va( 0.f ) ) ) == to_bits( asimd::gt( b, Vb( 0.f ) ) ) );
         CHECK( a.sum() == b.sum() );

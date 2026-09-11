@@ -420,10 +420,11 @@ are in [FINDINGS.md](FINDINGS.md). Where it stood, and where it stands:
 | value assertions, per feature level | 29 (one level) | **1 797**, at 5 x86 levels and 6 ARM ones |
 | cells needing the compiler's vector extensions to be fast (the MSVC gap) | 12 / 168 | **4 / 196** on x86, all integer division; **2 / 196** on ARM, both a constant-folding artefact |
 | compilers the suite runs under | 1 | **gcc 13, gcc 15, clang, MSVC** |
+| MSVC `/arch:` levels that compile, via the no-vector-extension path | — | **4 / 4** |
 
 ### What the ARM port found in the x86 code
 
-Four bugs, none of them ARM's, and each found by a different mechanism — which is the argument for
+Five bugs, none of them ARM's, and each found by a different mechanism — which is the argument for
 a second backend that the performance numbers do not make:
 
 1. **`any( a > b )` did not compile at 16 lanes** on any target with a register form at 8 — i.e.
@@ -444,7 +445,16 @@ a second backend that the performance numbers do not make:
    call became `iota( int, short, … )` and `T` could not be deduced. Found by adding `SI16` and
    `SI8` to the compile matrix. That call now has a cell in both grids.
 
-4. **`no_vecext.sh` had been measuring nothing** on any host whose `objdump` is LLVM's, or whose
+4. **`a - b` did not compile without the compiler's vector extensions**, at a width where a
+   register impl exists but the operation has no register form — 256-bit integers, i.e. MSVC's
+   `/arch:AVX`. The generic form's `requires { a.data.values OP b.data.values; }` is satisfied by
+   **array-to-pointer decay**: `ptr - ptr` is valid and yields a `ptrdiff_t`, which then will not
+   assign back to an array. `+`, `*`, `/` and `&` are ill-formed on pointers, so `sub` was the only
+   operator affected. The test now asks whether the result can be *assigned back*, which is what it
+   always meant. Found by MSVC's first CI run; no local row reached it, because the two `MSVC path`
+   rows were SSE2 and native and the gap is precisely between them. There is an `-mavx` one now.
+
+5. **`no_vecext.sh` had been measuring nothing** on any host whose `objdump` is LLVM's, or whose
    object format is Mach-O: `--disassemble=probe` fails, `grep -c` on empty output is 0, and every
    cell read `0->0`. It reported "0 of 168 cells degrade" — a clean sweep that was a broken tool.
    With it fixed, four cells degrade on x86 (integer division, which has no instruction on either
@@ -481,7 +491,14 @@ Next up:
 - **`DOTPROD` and `I8MM` want a new operation.** `SDOT` accumulates four 8-bit products into each
   32-bit lane; it is a *reduction*, so it is not a variant of `fma` but an operation of its own.
   x86 has nothing below AVX-512-VNNI to match it.
-- **MSVC is still unverified.** Not installed on the machine this was done on, so the portability
+- **One MSVC failure is open**, and narrowed rather than guessed at: a store round trip on
+  `SimdVec<SI16,16>` fails at `/arch:AVX2` and passes at `/arch:AVX`, where the library takes the
+  byte-identical path — that type has no register impl on x86 below AVX-512BW, so both levels
+  split 8 + 8 through the generic forms. The same lanes are checked by fifteen other assertions in
+  the same cell, all passing. The check now tests the static and member spellings of
+  `store_unaligned` apart and reports the offending lane, so the next run says which. See
+  FINDINGS § 9.6.
+- **MSVC is otherwise unverified.** Not installed on the machine this was done on, so the portability
   work is reasoned from documented behaviour, not measured — and that now includes ARM64, whose
   `<arm64_neon.h>` spelling and lack of `__ARM_FEATURE_*` macros this code handles unseen. clang
   *is* verified: on x86 at five feature levels and on AArch64 at six. The MSVC *path* is verified
